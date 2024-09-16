@@ -273,6 +273,7 @@ class Tree:
 
     def get_edges(self):
         # Exclude edges starting and ending at the root node
+        # Exclude self root as they do not represent any meaningful fragmentation event.
         edges = self.root.get_edges()
         edges = [(u, v) for u, v in edges if u != self.root.value or v != self.root.value]
         return edges
