@@ -7,7 +7,7 @@ import torch
 import matchms
 import massspecgym.utils as utils
 from pathlib import Path
-from typing import Optional
+from typing import Optional, List, Tuple
 from torch.utils.data.dataset import Dataset
 from torch.utils.data.dataloader import default_collate
 from torch_geometric.data import Data
@@ -218,7 +218,7 @@ class TreeNode:
             ret += child.__repr__(level + 1)
         return ret
 
-    def add_child(self, child_value):
+    def add_child(self, child_value) -> 'TreeNode':
         if child_value in self.children:
             return self.children[child_value]
         
@@ -228,12 +228,12 @@ class TreeNode:
         
         return child_node
 
-    def get_depth(self):
+    def get_depth(self) -> int:
         if not self.children:
             return 0
         return 1 + max(child.get_depth() for child in self.children.values())
 
-    def get_branching_factor(self):
+    def get_branching_factor(self) -> int:
         if not self.children:
             return 0
         return max(
@@ -250,14 +250,14 @@ class TreeNode:
 
 
 class Tree:
-    def __init__(self, root):
+    def __init__(self, root: float):
         self.root = TreeNode(root)
         self.paths = []
 
     def __repr__(self):
         return repr(self.root)
         
-    def add_path(self, path):
+    def add_path(self, path: List[float]) -> None:
         self.paths.append(path)
         if path[0] == self.root.value:
             path = path[1:]  # Skip the root node if it's in the path
@@ -323,7 +323,7 @@ class MSnDataset(MassSpecDataset):
     def __len__(self):
         return len(self.pyg_trees)
 
-    def __getitem__(self, idx, transform_mol=True):
+    def __getitem__(self, idx: int, transform_mol:bool = True) -> dict:
         spec_tree = self.pyg_trees[idx]
         smi = self.smiles[idx]
 
@@ -335,6 +335,9 @@ class MSnDataset(MassSpecDataset):
         return item
     
     def _add_identifiers(self, df):
+        # Input is Dataframe of metadata for each spectrum
+        # function expect sequential order of spectra, so after MS2 all children will follow,
+        # till encountered another new MS2 root
         id_counter = 0
         id_list = []  
 
@@ -356,13 +359,14 @@ class MSnDataset(MassSpecDataset):
 
         # first collect all precursor_mz values
         all_precursor_mz = []
-        for ms_level, precursor_mz, smi in zip(df["ms_level"], df["precursor_mz"], df["smiles"]):
+        for ms_level, precursor_mz, smile in zip(df["ms_level"], df["precursor_mz"], df["smiles"]):
             # use ms_level to detect when a spectrum is MS2
             if int(ms_level) == 2:
                 all_precursor_mz.append(precursor_mz)
-                all_tree_paths.append([smi, precursor_mz, []])
+                all_tree_paths.append([smile, precursor_mz, []])
 
-        # then iterate over the df and when msn_precursor_mzs is NaN, go to the next item in all_tree_paths
+        # then iterate over the df and when msn_precursor_mzs is NaN, it is MS2 root
+        # , go to the next item in all_tree_paths
         # assuming that the first ms_level == 2
         idx_cur_precursors_mz = -1
         for _, row in df.iterrows():
@@ -373,14 +377,31 @@ class MSnDataset(MassSpecDataset):
             else:
                 # else add the path at the appropriate index
                 cur_path_group = all_tree_paths[idx_cur_precursors_mz][2]
-                msn_precursor_mzs = ast.literal_eval(row["msn_precursor_mzs"])
+                # raises an exception if the input isn't a valid Python datatype, should be list of floats
+                msn_precursor_mzs_str = row["msn_precursor_mzs"]
                 # replace the first value of msn_precursor_mzs with precursor_mz
+
+                if pd.isna(msn_precursor_mzs_str) or msn_precursor_mzs_str == 'None':
+                    print(f"Skip if msn_precursor_mzs at index {_} is None or NaN")
+                    continue
+                try:
+                    msn_precursor_mzs = ast.literal_eval(msn_precursor_mzs_str)
+                except Exception as e:
+                    # Handle parsing errors
+                    print(f"Error parsing msn_precursor_mzs: {msn_precursor_mzs_str} at index {_}. Error: {e}")
+                    continue
+                if not isinstance(msn_precursor_mzs, list) or len(msn_precursor_mzs) == 0:
+                    print("Skip if msn_precursor_mzs at index {_} is not a valid list")
+                    continue
+
+                # Replace the first element of msn_precursor_mzs with the root precursor_mz of the current tree
                 msn_precursor_mzs[0] = all_precursor_mz[idx_cur_precursors_mz]
                 cur_path_group.append(msn_precursor_mzs)
 
         return all_tree_paths
     
-    def _generate_trees(self, dataset_all_tree_paths):
+    def _generate_trees(self, dataset_all_tree_paths: List[Tuple[str, float, List[List[float]]]]) \
+            -> Tuple[List['Tree'], List[Data], List[str]]:
         trees = []
         pyg_trees = []
         smiles = []
