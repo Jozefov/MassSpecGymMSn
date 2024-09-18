@@ -208,9 +208,10 @@ class RetrievalDataset(MassSpecDataset):
 
 
 class TreeNode:
-    def __init__(self, value):
-        self.value = value
-        self.children = {}
+    def __init__(self, value, spectrum):
+        self.value = value # m/z value of the node
+        self.spectrum = spectrum # Spectrum associated with this node
+        self.children = {} # Dictionary to hold child nodes
 
     def __repr__(self, level=0):
         ret = "  " * level + repr(self.value) + "\n"
@@ -218,15 +219,27 @@ class TreeNode:
             ret += child.__repr__(level + 1)
         return ret
 
-    def add_child(self, child_value) -> 'TreeNode':
+    def get_child(self, child_value) -> 'TreeNode':
         if child_value in self.children:
             return self.children[child_value]
-        
-        # Create new child node
-        child_node = TreeNode(child_value)
-        self.children[child_value] = child_node
-        
-        return child_node
+        else:
+            raise ValueError(f"Child with value {child_value} not found in children of node with value {self.value}")
+
+    def add_child(self, child_value, spectrum=None) -> 'TreeNode':
+        if child_value in self.children:
+            child_node = self.children[child_value]
+            if spectrum is not None:
+                if child_node.spectrum is not None and child_node.spectrum != spectrum:
+                    # If the node already has a spectrum, and it's different, throw an error
+                    raise ValueError(f"Node with value {child_value} already has a spectrum.")
+                else:
+                    child_node.spectrum = spectrum
+            return child_node
+        else:
+            # Create new child node with the spectrum (could be None)
+            child_node = TreeNode(child_value, spectrum=spectrum)
+            self.children[child_value] = child_node
+            return child_node
 
     def get_depth(self) -> int:
         if not self.children:
@@ -250,20 +263,32 @@ class TreeNode:
 
 
 class Tree:
-    def __init__(self, root: float):
-        self.root = TreeNode(root)
-        self.paths = []
+    def __init__(self, root: float, spectrum=None):
+        self.root = TreeNode(root, spectrum=spectrum)
+        # self.paths = []
 
     def __repr__(self):
         return repr(self.root)
         
     def add_path(self, path: List[float]) -> None:
-        self.paths.append(path)
+        # self.paths.append(path)
         if path[0] == self.root.value:
             path = path[1:]  # Skip the root node if it's in the path
         current_node = self.root
         for node in path:
             current_node = current_node.add_child(node)
+
+    def add_path_with_spectrum(self, path: List[float], spectrum: matchms.Spectrum) -> None:
+        if path[0] == self.root.value:
+            path = path[1:]  # Skip the root node if it's in the path
+        current_node = self.root
+        for i, node_value in enumerate(path):
+            if i == len(path) - 1:
+                # Last node in the path, associate the spectrum
+                current_node = current_node.add_child(node_value, spectrum)
+            else:
+                # Intermediate nodes: create them if they don't exist, with spectrum=None
+                current_node = current_node.add_child(node_value)
 
     def get_depth(self):
         return self.root.get_depth()
@@ -308,20 +333,24 @@ class MSnDataset(MassSpecDataset):
         self.metadata = self.metadata[self.metadata["spectype"] == "ALL_ENERGIES"]
 
         # TODO: add identifiers (and split?) to the mgf file
-        # add identifiers to the metadata
-        self.metadata = self._add_identifiers(self.metadata)
-        self.identifiers = np.unique(self.metadata["identifier"])
+
+        # Map identifier to spectra
+        # Create mappings from 'IDENTIFIER' to spectra and spectra indices
+        self.identifier_to_spectrum = {spectrum.get('identifier'): spectrum for spectrum in self.spectra}
 
         # get paths from the metadata
         self.all_tree_paths = self._parse_paths_from_df(self.metadata)
 
-        # generate trees from paths and their corresponding SMILES
-        self.trees, self.pyg_trees, self.smiles = self._generate_trees(self.all_tree_paths)
+        # Generate trees from paths and their corresponding SMILES
+        self.trees, self.smiles = self._generate_trees(self.all_tree_paths)
+
+        # TODO PYG trees
 
         self.tree_depths = self._get_tree_depths(self.trees)
         self.branching_factors = self._get_branching_factors(self.trees)
 
     def __len__(self):
+        # TODO
         return len(self.pyg_trees)
 
     def __getitem__(self, idx: int, transform_mol:bool = True) -> dict:
@@ -335,52 +364,91 @@ class MSnDataset(MassSpecDataset):
         item  = {"spec_tree": spec_tree, "mol": mol}
         return item
     
-    def _add_identifiers(self, df):
-        # Input is Dataframe of metadata for each spectrum
-        # function expect sequential order of spectra, so after MS2 all children will follow,
-        # till encountered another new MS2 root
-        id_counter = 0
-        id_list = []  
+    # def _add_identifiers(self, df):
+    #     # Input is Dataframe of metadata for each spectrum
+    #     # function expect sequential order of spectra, so after MS2 all children will follow,
+    #     # till encountered another new MS2 root
+    #     id_counter = 0
+    #     id_list = []
+    #
+    #     for _, row in df.iterrows():
+    #         ms_level = int(row["ms_level"])
+    #         if ms_level == 2:
+    #             id_counter += 1
+    #         # for MSn levels, maintain the ID based on the current precursor_mz group
+    #
+    #         msn_id = f"MSnID{id_counter:07d}"
+    #         id_list.append(msn_id)
+    #
+    #     df.insert(0, 'identifier', id_list)
+    #
+    #     return df
+    
+    # def _parse_paths_from_df(self, df):
+    #     all_tree_paths = []
+    #
+    #     # first collect all precursor_mz values
+    #     all_precursor_mz = []
+    #     for ms_level, precursor_mz, smile in zip(df["ms_level"], df["precursor_mz"], df["smiles"]):
+    #         # use ms_level to detect when a spectrum is MS2
+    #         if int(ms_level) == 2:
+    #             all_precursor_mz.append(precursor_mz)
+    #             all_tree_paths.append([smile, precursor_mz, []])
+    #
+    #     # then iterate over the df and when msn_precursor_mzs is NaN, it is MS2 root
+    #     # , go to the next item in all_tree_paths
+    #     # assuming that the first ms_level == 2
+    #     idx_cur_precursors_mz = -1
+    #     for _, row in df.iterrows():
+    #         if int(row["ms_level"]) == 2:
+    #             # if the spectrum is MS2, go to the next tree
+    #             idx_cur_precursors_mz += 1
+    #             continue
+    #         else:
+    #             # else add the path at the appropriate index
+    #             cur_path_group = all_tree_paths[idx_cur_precursors_mz][2]
+    #             # raises an exception if the input isn't a valid Python datatype, should be list of floats
+    #             msn_precursor_mzs_str = row["msn_precursor_mzs"]
+    #
+    #             if pd.isna(msn_precursor_mzs_str) or msn_precursor_mzs_str == 'None':
+    #                 print(f"Skip if msn_precursor_mzs at index {_} is None or NaN")
+    #                 continue
+    #             try:
+    #                 msn_precursor_mzs = ast.literal_eval(msn_precursor_mzs_str)
+    #             except Exception as e:
+    #                 # Handle parsing errors
+    #                 print(f"Error parsing msn_precursor_mzs: {msn_precursor_mzs_str} at index {_}. Error: {e}")
+    #                 continue
+    #             if not isinstance(msn_precursor_mzs, list) or len(msn_precursor_mzs) == 0:
+    #                 print("Skip if msn_precursor_mzs at index {_} is not a valid list")
+    #                 continue
+    #
+    #             # Replace the first element of msn_precursor_mzs with the root precursor_mz of the current tree
+    #             msn_precursor_mzs[0] = all_precursor_mz[idx_cur_precursors_mz]
+    #             cur_path_group.append(msn_precursor_mzs)
+    #
+    #     return all_tree_paths
 
+    def _parse_paths_from_df(self, df) -> List[Tuple[str, float, List[Tuple[List[float], matchms.Spectrum]], matchms.Spectrum]]:
+        all_tree_paths = []
+
+        # First, collect all precursor_mz values and root spectra
+        all_precursor_mz = []
+        for ms_level, precursor_mz, smile, identifier in zip(df["ms_level"], df["precursor_mz"], df["smiles"], df["identifier"]):
+            if int(ms_level) == 2:
+                root_spectrum = self.identifier_to_spectrum[identifier]
+                all_precursor_mz.append(precursor_mz)
+                all_tree_paths.append((smile, precursor_mz, [], root_spectrum))
+
+        idx_cur_precursors_mz = -1
         for _, row in df.iterrows():
             ms_level = int(row["ms_level"])
             if ms_level == 2:
-                id_counter += 1
-            # for MSn levels, maintain the ID based on the current precursor_mz group
-
-            msn_id = f"MSnID{id_counter:07d}"
-            id_list.append(msn_id)
-
-        df.insert(0, 'identifier', id_list)
-
-        return df
-    
-    def _parse_paths_from_df(self, df):
-        all_tree_paths = []
-
-        # first collect all precursor_mz values
-        all_precursor_mz = []
-        for ms_level, precursor_mz, smile in zip(df["ms_level"], df["precursor_mz"], df["smiles"]):
-            # use ms_level to detect when a spectrum is MS2
-            if int(ms_level) == 2:
-                all_precursor_mz.append(precursor_mz)
-                all_tree_paths.append([smile, precursor_mz, []])
-
-        # then iterate over the df and when msn_precursor_mzs is NaN, it is MS2 root
-        # , go to the next item in all_tree_paths
-        # assuming that the first ms_level == 2
-        idx_cur_precursors_mz = -1
-        for _, row in df.iterrows():
-            if int(row["ms_level"]) == 2:
-                # if the spectrum is MS2, go to the next tree
                 idx_cur_precursors_mz += 1
                 continue
             else:
-                # else add the path at the appropriate index
                 cur_path_group = all_tree_paths[idx_cur_precursors_mz][2]
-                # raises an exception if the input isn't a valid Python datatype, should be list of floats
                 msn_precursor_mzs_str = row["msn_precursor_mzs"]
-                # replace the first value of msn_precursor_mzs with precursor_mz
 
                 if pd.isna(msn_precursor_mzs_str) or msn_precursor_mzs_str == 'None':
                     print(f"Skip if msn_precursor_mzs at index {_} is None or NaN")
@@ -388,36 +456,55 @@ class MSnDataset(MassSpecDataset):
                 try:
                     msn_precursor_mzs = ast.literal_eval(msn_precursor_mzs_str)
                 except Exception as e:
-                    # Handle parsing errors
                     print(f"Error parsing msn_precursor_mzs: {msn_precursor_mzs_str} at index {_}. Error: {e}")
                     continue
                 if not isinstance(msn_precursor_mzs, list) or len(msn_precursor_mzs) == 0:
-                    print("Skip if msn_precursor_mzs at index {_} is not a valid list")
+                    print(f"Skip if msn_precursor_mzs at index {_} is not a valid list")
                     continue
 
-                # Replace the first element of msn_precursor_mzs with the root precursor_mz of the current tree
+                # Replace the first element of msn_precursor_mzs with the root precursor_mz
                 msn_precursor_mzs[0] = all_precursor_mz[idx_cur_precursors_mz]
-                cur_path_group.append(msn_precursor_mzs)
+
+                # Get the spectrum for this row
+                identifier = row['identifier']
+                spectrum = self.identifier_to_spectrum[identifier]
+
+                # Append the path and spectrum as a tuple
+                cur_path_group.append((msn_precursor_mzs, spectrum))
 
         return all_tree_paths
     
-    def _generate_trees(self, dataset_all_tree_paths: List[Tuple[str, float, List[List[float]]]]) \
-            -> Tuple[List['Tree'], List[Data], List[str]]:
+    # def _generate_trees(self, dataset_all_tree_paths: List[Tuple[str, float, List[List[float]]]]) \
+    #         -> Tuple[List['Tree'], List[Data], List[str]]:
+    #     trees = []
+    #     pyg_trees = []
+    #     smiles = []
+    #
+    #     for smi, root, paths in dataset_all_tree_paths:
+    #         tree = Tree(root)
+    #         for path in paths:
+    #             tree.add_path(path)
+    #         pyg_tree = tree.to_pyg_data()
+    #         trees.append(tree)
+    #         pyg_trees.append(pyg_tree)
+    #         smiles.append(smi)
+    #
+    #     return trees, pyg_trees, smiles
+
+    def _generate_trees(self, dataset_all_tree_paths: List[Tuple[str, float, List[Tuple[List[float], matchms.Spectrum]], matchms.Spectrum]]) \
+            -> Tuple[List['Tree'], List[str]]:
         trees = []
-        pyg_trees = []
         smiles = []
 
-        for smi, root, paths in dataset_all_tree_paths:
-            tree = Tree(root)
-            for path in paths:
-                tree.add_path(path)
-            pyg_tree = tree.to_pyg_data()
+        for smi, root_precursor_mz, paths, root_spectrum in dataset_all_tree_paths:
+            tree = Tree(root_precursor_mz, spectrum=root_spectrum)
+            for path, spectrum in paths:
+                tree.add_path_with_spectrum(path, spectrum)
             trees.append(tree)
-            pyg_trees.append(pyg_tree)
             smiles.append(smi)
 
-        return trees, pyg_trees, smiles
-    
+        return trees, smiles
+
     def _get_tree_depths(self, trees):
         return [tree.get_depth() for tree in trees]
     
