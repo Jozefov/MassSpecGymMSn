@@ -303,20 +303,68 @@ class Tree:
         edges = [(u, v) for u, v in edges if u != self.root.value or v != self.root.value]
         return edges
     
-    def to_pyg_data(self):
-        edges = self.get_edges()
+    # def to_pyg_data(self):
+    #     edges = self.get_edges()
+    #
+    #     # Extract unique node indices
+    #     nodes_set = set(sum(edges, ()))
+    #     node_indices = {node: idx for idx, node in enumerate(nodes_set)}
+    #
+    #     # Prepare edge_index tensor
+    #     edge_index = torch.tensor([[node_indices[edge[0]], node_indices[edge[1]]] for edge in edges],
+    #                               dtype=torch.long).t().contiguous()
+    #
+    #     # Prepare node features tensor
+    #     node_list = list(nodes_set)
+    #     x = torch.tensor(node_list, dtype=torch.float).view(-1, 1)
+    #
+    #     # Create Data object
+    #     data = Data(x=x, edge_index=edge_index)
+    #
+    #     return data
 
-        # Extract unique node indices
-        nodes_set = set(sum(edges, ()))
-        node_indices = {node: idx for idx, node in enumerate(nodes_set)}
-        
-        # Prepare edge_index tensor
-        edge_index = torch.tensor([[node_indices[edge[0]], node_indices[edge[1]]] for edge in edges],
-                                  dtype=torch.long).t().contiguous()
+    def to_pyg_data(self, featurizer: SpectrumFeaturizer):
+        from torch_geometric.data import Data
+        import torch
 
-        # Prepare node features tensor
-        node_list = list(nodes_set)
-        x = torch.tensor(node_list, dtype=torch.float).view(-1, 1)
+        # Collect nodes and edges
+        nodes = []
+        edges = []
+
+        # Use a queue to traverse the tree (Breadth-First Search)
+        from collections import deque
+        queue = deque()
+        queue.append(self.root)
+        visited = set()
+        while queue:
+            node = queue.popleft()
+            if id(node) in visited:
+                continue
+            visited.add(id(node))
+            nodes.append(node)
+            for child in node.children.values():
+                edges.append((node, child))
+                queue.append(child)
+
+        # Assign indices to nodes
+        node_to_index = {node: idx for idx, node in enumerate(nodes)}
+
+        # Build edge_index tensor
+        edge_index = torch.tensor(
+            [[node_to_index[edge[0]], node_to_index[edge[1]]] for edge in edges],
+            dtype=torch.long
+        ).t().contiguous()
+
+        # Build node features
+        node_features = []
+        feature_dim = None
+        for node in nodes:
+            feature_vector = featurizer.featurize(node)
+            if feature_dim is None:
+                feature_dim = len(feature_vector)
+            node_features.append(feature_vector)
+
+        x = torch.tensor(node_features, dtype=torch.float)
 
         # Create Data object
         data = Data(x=x, edge_index=edge_index)
@@ -342,7 +390,7 @@ class MSnDataset(MassSpecDataset):
         self.all_tree_paths = self._parse_paths_from_df(self.metadata)
 
         # Generate trees from paths and their corresponding SMILES
-        self.trees, self.smiles = self._generate_trees(self.all_tree_paths)
+        self.trees, self.pyg_trees, self.smiles = self._generate_trees(self.all_tree_paths)
 
         # TODO PYG trees
 
@@ -363,71 +411,7 @@ class MSnDataset(MassSpecDataset):
         
         item  = {"spec_tree": spec_tree, "mol": mol}
         return item
-    
-    # def _add_identifiers(self, df):
-    #     # Input is Dataframe of metadata for each spectrum
-    #     # function expect sequential order of spectra, so after MS2 all children will follow,
-    #     # till encountered another new MS2 root
-    #     id_counter = 0
-    #     id_list = []
-    #
-    #     for _, row in df.iterrows():
-    #         ms_level = int(row["ms_level"])
-    #         if ms_level == 2:
-    #             id_counter += 1
-    #         # for MSn levels, maintain the ID based on the current precursor_mz group
-    #
-    #         msn_id = f"MSnID{id_counter:07d}"
-    #         id_list.append(msn_id)
-    #
-    #     df.insert(0, 'identifier', id_list)
-    #
-    #     return df
-    
-    # def _parse_paths_from_df(self, df):
-    #     all_tree_paths = []
-    #
-    #     # first collect all precursor_mz values
-    #     all_precursor_mz = []
-    #     for ms_level, precursor_mz, smile in zip(df["ms_level"], df["precursor_mz"], df["smiles"]):
-    #         # use ms_level to detect when a spectrum is MS2
-    #         if int(ms_level) == 2:
-    #             all_precursor_mz.append(precursor_mz)
-    #             all_tree_paths.append([smile, precursor_mz, []])
-    #
-    #     # then iterate over the df and when msn_precursor_mzs is NaN, it is MS2 root
-    #     # , go to the next item in all_tree_paths
-    #     # assuming that the first ms_level == 2
-    #     idx_cur_precursors_mz = -1
-    #     for _, row in df.iterrows():
-    #         if int(row["ms_level"]) == 2:
-    #             # if the spectrum is MS2, go to the next tree
-    #             idx_cur_precursors_mz += 1
-    #             continue
-    #         else:
-    #             # else add the path at the appropriate index
-    #             cur_path_group = all_tree_paths[idx_cur_precursors_mz][2]
-    #             # raises an exception if the input isn't a valid Python datatype, should be list of floats
-    #             msn_precursor_mzs_str = row["msn_precursor_mzs"]
-    #
-    #             if pd.isna(msn_precursor_mzs_str) or msn_precursor_mzs_str == 'None':
-    #                 print(f"Skip if msn_precursor_mzs at index {_} is None or NaN")
-    #                 continue
-    #             try:
-    #                 msn_precursor_mzs = ast.literal_eval(msn_precursor_mzs_str)
-    #             except Exception as e:
-    #                 # Handle parsing errors
-    #                 print(f"Error parsing msn_precursor_mzs: {msn_precursor_mzs_str} at index {_}. Error: {e}")
-    #                 continue
-    #             if not isinstance(msn_precursor_mzs, list) or len(msn_precursor_mzs) == 0:
-    #                 print("Skip if msn_precursor_mzs at index {_} is not a valid list")
-    #                 continue
-    #
-    #             # Replace the first element of msn_precursor_mzs with the root precursor_mz of the current tree
-    #             msn_precursor_mzs[0] = all_precursor_mz[idx_cur_precursors_mz]
-    #             cur_path_group.append(msn_precursor_mzs)
-    #
-    #     return all_tree_paths
+
 
     def _parse_paths_from_df(self, df) -> List[Tuple[str, float, List[Tuple[List[float], matchms.Spectrum]], matchms.Spectrum]]:
         all_tree_paths = []
@@ -492,18 +476,22 @@ class MSnDataset(MassSpecDataset):
     #     return trees, pyg_trees, smiles
 
     def _generate_trees(self, dataset_all_tree_paths: List[Tuple[str, float, List[Tuple[List[float], matchms.Spectrum]], matchms.Spectrum]]) \
-            -> Tuple[List['Tree'], List[str]]:
+            -> Tuple[List['Tree'], List['Data'], List[str]]:
         trees = []
         smiles = []
+        pyg_trees = []
 
         for smi, root_precursor_mz, paths, root_spectrum in dataset_all_tree_paths:
             tree = Tree(root_precursor_mz, spectrum=root_spectrum)
             for path, spectrum in paths:
                 tree.add_path_with_spectrum(path, spectrum)
+
+            pyg_tree = tree.to_pyg_data()
+            pyg_trees.append(pyg_tree)
             trees.append(tree)
             smiles.append(smi)
 
-        return trees, smiles
+        return trees, pyg_trees, smiles
 
     def _get_tree_depths(self, trees):
         return [tree.get_depth() for tree in trees]
