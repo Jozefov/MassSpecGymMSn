@@ -303,30 +303,29 @@ class Tree:
         edges = self.root.get_edges()
         edges = [(u, v) for u, v in edges if u != self.root.value or v != self.root.value]
         return edges
-    
-    # def to_pyg_data(self):
-    #     edges = self.get_edges()
-    #
-    #     # Extract unique node indices
-    #     nodes_set = set(sum(edges, ()))
-    #     node_indices = {node: idx for idx, node in enumerate(nodes_set)}
-    #
-    #     # Prepare edge_index tensor
-    #     edge_index = torch.tensor([[node_indices[edge[0]], node_indices[edge[1]]] for edge in edges],
-    #                               dtype=torch.long).t().contiguous()
-    #
-    #     # Prepare node features tensor
-    #     node_list = list(nodes_set)
-    #     x = torch.tensor(node_list, dtype=torch.float).view(-1, 1)
-    #
-    #     # Create Data object
-    #     data = Data(x=x, edge_index=edge_index)
-    #
-    #     return data
 
-    def to_pyg_data(self, featurizer: SpectrumFeaturizer):
-        from torch_geometric.data import Data
-        import torch
+
+    def to_pyg_data(self, featurizer: Optional[SpectrumFeaturizer] = None):
+
+        if featurizer is None:
+            edges = self.get_edges()
+
+            # Extract unique node indices
+            nodes_set = set(sum(edges, ()))
+            node_indices = {node: idx for idx, node in enumerate(nodes_set)}
+
+            # Prepare edge_index tensor
+            edge_index = torch.tensor([[node_indices[edge[0]], node_indices[edge[1]]] for edge in edges],
+                                      dtype=torch.long).t().contiguous()
+
+            # Prepare node features tensor
+            node_list = list(nodes_set)
+            x = torch.tensor(node_list, dtype=torch.float).view(-1, 1)
+
+            # Create Data object
+            data = Data(x=x, edge_index=edge_index)
+
+            return data
 
         # Collect nodes and edges
         nodes = []
@@ -374,7 +373,7 @@ class Tree:
 
 
 class MSnDataset(MassSpecDataset):
-    def __init__(self, pth=None, dtype=torch.float32, mol_transform=None):
+    def __init__(self, pth=None, dtype=torch.float32, mol_transform=None, featurizer=None):
         self.mol_transform = mol_transform
 
         # load dataset using the parent class
@@ -386,6 +385,9 @@ class MSnDataset(MassSpecDataset):
         # Map identifier to spectra
         # Create mappings from 'IDENTIFIER' to spectra and spectra indices
         self.identifier_to_spectrum = {spectrum.get('identifier'): spectrum for spectrum in self.spectra}
+
+        # Create feaurizer that wil parse and annotate PYG data
+        self.featurizer = featurizer
 
         # get paths from the metadata
         self.all_tree_paths = self._parse_paths_from_df(self.metadata)
@@ -487,7 +489,7 @@ class MSnDataset(MassSpecDataset):
             for path, spectrum in paths:
                 tree.add_path_with_spectrum(path, spectrum)
 
-            pyg_tree = tree.to_pyg_data()
+            pyg_tree = tree.to_pyg_data(self.featurizer)
             pyg_trees.append(pyg_tree)
             trees.append(tree)
             smiles.append(smi)

@@ -39,7 +39,7 @@ class SpectrumTransformerFeaturizer(SpectrumFeaturizer):
             'CLS': config.get('cls_token_id', 0),
             'SEP': config.get('sep_token_id', 1),
             'PAD': config.get('pad_token_id', 2),
-            'SPEC_START': config.get('spec_start_token_id', 3),  # Optional
+            'SPEC_START': config.get('spec_start_token_id', 1),  # Optional
         }
 
         self.output_peak_embedding_dim = self.config.get('feature_attributes', {}).get('spectral_data', {}).get(
@@ -113,6 +113,16 @@ class SpectrumTransformerFeaturizer(SpectrumFeaturizer):
                         self.categorical_token_ids['collision_energy'][i] = token_count
                         token_count += 1
                 # No need to assign token IDs if using continuous encoding
+
+            elif feature_name == 'retention_time':
+                encoding_method = self.config.get('feature_attributes', {}).get('retention_time', {}).get('encoding',
+                                                                                                          'continuous')
+                if encoding_method == 'binning':
+                    bins = self.config.get('feature_attributes', {}).get('retention_time', {}).get('bins', RETENTION_TIME_BINS)
+                    self.categorical_token_ids['retention_time'] = {}
+                    for i in range(len(bins)):
+                        self.categorical_token_ids['retention_time'][i] = token_count
+                        token_count += 1
 
         return token_count
 
@@ -209,7 +219,7 @@ class SpectrumTransformerFeaturizer(SpectrumFeaturizer):
 
         if encoding_method == 'binning':
             # Use predefined bins and token IDs
-            bins = self.config.get('feature_attributes', {}).get('collision_energy', {}).get('bins', [0, 20, 40, 60, 80, 100])
+            bins = self.config.get('feature_attributes', {}).get('collision_energy', {}).get('bins', COLLISION_ENERGY_BINS)
             bin_indices = np.digitize([collision_energy], bins) - 1
             bin_index = bin_indices[0]
             bin_index = min(bin_index, len(bins) - 1)
@@ -222,6 +232,30 @@ class SpectrumTransformerFeaturizer(SpectrumFeaturizer):
             return [ce_embedding]
         else:
             raise ValueError("Invalid encoding method for collision_energy.")
+
+    def _featurize_retention_time(self, node):
+        spectrum = node.spectrum
+        retention_time = float(spectrum.get('retention_time', 0.0)) if spectrum else 0.0
+        encoding_method = self.config.get('feature_attributes', {}).get('retention_time', {}).get('encoding',
+                                                                                                  'continuous')
+
+        if encoding_method == 'binning':
+            # Define bins and assign token IDs (similar to collision_energy)
+            bins = self.config.get('feature_attributes', {}).get('retention_time', {}).get('bins',
+                                                                                           [0, 1, 2, 5, 10, 20, 30, 40,
+                                                                                            50])
+            bin_indices = np.digitize([retention_time], bins) - 1
+            bin_index = bin_indices[0]
+            bin_index = min(bin_index, len(bins) - 1)
+            token_id = self.categorical_token_ids['retention_time'][bin_index]
+            token_embedding = self.token_embeddings(torch.tensor(token_id))
+            return [token_embedding]
+        elif encoding_method == 'continuous':
+            rt_tensor = torch.tensor([[retention_time]], dtype=torch.float32)
+            rt_embedding = self.numeric_feature_embeddings['retention_time'](rt_tensor).squeeze(0)
+            return [rt_embedding]
+        else:
+            raise ValueError("Invalid encoding method for retention_time.")
 
     # Categorical Feature Methods
     def _featurize_ionmode(self, node):
