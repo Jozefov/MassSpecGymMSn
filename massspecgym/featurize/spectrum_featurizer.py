@@ -6,7 +6,7 @@ import torch
 import torch.nn as nn
 import re
 from typing import List, Dict, Optional, Callable
-from constants import *
+from massspecgym.featurize.constants import *
 
 class SpectrumFeaturizer:
     def __init__(self, config: Dict):

@@ -1,8 +1,8 @@
 import torch
 import torch.nn as nn
 from typing import Dict
-from spectrum_featurizer import SpectrumFeaturizer
-from constants import *
+from massspecgym.featurize.spectrum_featurizer import SpectrumFeaturizer
+from massspecgym.featurize.constants import *
 import numpy as np
 
 class SpectrumTransformerFeaturizer(SpectrumFeaturizer):

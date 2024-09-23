@@ -12,6 +12,7 @@ from torch.utils.data.dataset import Dataset
 from torch.utils.data.dataloader import default_collate
 from torch_geometric.data import Data
 from matchms.importing import load_from_mgf
+from massspecgym.featurize import SpectrumFeaturizer
 from massspecgym.data.transforms import SpecTransform, MolTransform, MolToInChIKey
 
 
