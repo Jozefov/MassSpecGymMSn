@@ -158,6 +158,7 @@ class SpectrumTransformerFeaturizer(SpectrumFeaturizer):
             position += 1
 
         # Encode spectral data (if included)
+        spectral_embeddings = None
         if 'spectral_data' in self.config.get('features', []):
             spectral_embeddings = self._featurize_spectral_data(node)
             for emb in spectral_embeddings:
@@ -182,8 +183,22 @@ class SpectrumTransformerFeaturizer(SpectrumFeaturizer):
                 position_ids.append(position)
                 position += 1
 
-        # TODO shapes?
-        embeddings = torch.stack(sequence_embeddings)
+        # Stack embeddings
+        if spectral_embeddings and isinstance(spectral_embeddings[0], torch.Tensor):
+            if spectral_embeddings[0].dim() == 1:
+                # 1D embeddings, stack normally
+                embeddings = torch.stack(sequence_embeddings)
+            elif spectral_embeddings[0].dim() == 2:
+                # 2D embeddings, need to handle accordingly
+                # For example, flatten or stack differently
+                embeddings = torch.cat(
+                    [emb.unsqueeze(0) if emb.dim() == 1 else emb.view(-1, self.embedding_dim) for emb in
+                     sequence_embeddings], dim=0)
+            else:
+                raise ValueError("Unexpected embedding dimension.")
+        else:
+            embeddings = torch.stack(sequence_embeddings)
+
         return embeddings
 
     def _featurize_collision_energy(self, node):
@@ -275,7 +290,5 @@ class SpectrumTransformerFeaturizer(SpectrumFeaturizer):
                 raise ValueError("Invalid output_peak_embedding_dim. Choose '1d' or '2d'.")
 
             spectral_embeddings.append(peak_embedding)
-
-        return spectral_embeddings
 
         return spectral_embeddings
