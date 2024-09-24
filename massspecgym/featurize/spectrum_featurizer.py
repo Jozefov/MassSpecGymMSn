@@ -9,12 +9,13 @@ from typing import List, Dict, Optional, Callable
 from massspecgym.featurize.constants import *
 
 class SpectrumFeaturizer:
-    def __init__(self, config: Dict):
+    def __init__(self, config: Dict, mode: str = 'numpy'):
         """
         Initialize the SpectrumFeaturizer with a configuration dictionary.
 
         Parameters:
         - config: Dictionary specifying which features to include and any parameters.
+        - mode: 'numpy' or 'torch', specifies the output type of the featurizer methods.
 
         Example 1:
             config_mode1 = {
@@ -46,28 +47,72 @@ class SpectrumFeaturizer:
             }
         """
         self.config = config
+        self.mode = mode.lower()
+        assert self.mode in ['numpy', 'torch'], "Mode must be 'numpy' or 'torch'"
 
         # Map feature names to methods
         self.feature_methods = FEATURE_METHODS
 
-    def featurize(self, node) -> np.ndarray:
+    def featurize(self, node):
         """
         Featurize a TreeNode into a feature vector based on the configuration.
+        Returns either a NumPy array or a PyTorch tensor based on the mode.
         """
-        feature_list = []
+        feature_tensors = []
+
         for feature_name in self.config.get('features', []):
             method_name = self.feature_methods.get(feature_name)
             if method_name is not None:
                 method = getattr(self, method_name)
-                feature_values = method(node)
-                feature_list.append(feature_values)
+                feature_tensor = method(node)
+                feature_tensors.append(feature_tensor)
             else:
                 raise ValueError(f"Feature '{feature_name}' is not supported.")
 
-        # Concatenate all feature arrays
-        feature_vector = np.concatenate(feature_list)
-        return feature_vector
+        # Concatenate feature tensors
+        if self.mode == 'numpy':
+            feature_vector = np.concatenate(feature_tensors)
+            return feature_vector  # Returns a NumPy array
+        else:
+            feature_tensor = torch.cat(feature_tensors)
+            return feature_tensor  # Returns a PyTorch tensor
 
+    def _featurize_value(self, node):
+        """
+        Featurize the 'value' attribute of the node.
+
+        Supports 'continuous' or 'binning' encoding, with optional normalization.
+        """
+        value = float(node.value) if node.value is not None else 0.0
+        encoding_method = self.config.get('feature_attributes', {}).get('value', {}).get('encoding', 'continuous')
+        normalize = self.config.get('feature_attributes', {}).get('value', {}).get('normalize', False)
+
+        if encoding_method == 'binning':
+            bins = self.config.get('feature_attributes', {}).get('value', {}).get('bins', VALUE_BINS)
+            bin_indices = np.digitize([value], bins) - 1
+            bin_index = bin_indices[0]
+            bin_index = min(bin_index, len(bins) - 1)
+            if self.mode == 'numpy':
+                one_hot = np.zeros(len(bins), dtype=np.float32)
+                one_hot[bin_index] = 1.0
+                return one_hot
+            else:
+                one_hot = torch.zeros(len(bins), dtype=torch.float32)
+                one_hot[bin_index] = 1.0
+                return one_hot
+
+        elif encoding_method == 'continuous':
+            # TODO normalization?
+            if normalize:
+                max_value = self.config.get('feature_attributes', {}).get('value', {}).get('max_value', 2000)
+                min_value = self.config.get('feature_attributes', {}).get('value', {}).get('min_value', 0)
+                value = (value - min_value) / (max_value - min_value)
+            if self.mode == 'numpy':
+                return np.array([value], dtype=np.float32)
+            else:
+                return torch.tensor([value], dtype=torch.float32)
+        else:
+            raise ValueError("Invalid encoding method for value.")
 
     def _featurize_collision_energy(self, node):
         spectrum = node.spectrum
@@ -79,11 +124,19 @@ class SpectrumFeaturizer:
             bin_indices = np.digitize([collision_energy], bins) - 1
             bin_index = bin_indices[0]
             bin_index = min(bin_index, len(bins) - 1)
-            one_hot = np.zeros(len(bins), dtype=np.float32)
-            one_hot[bin_index] = 1.0
-            return one_hot
+            if self.mode == 'numpy':
+                one_hot = np.zeros(len(bins), dtype=np.float32)
+                one_hot[bin_index] = 1.0
+                return one_hot
+            else:
+                one_hot = torch.zeros(len(bins), dtype=torch.float32)
+                one_hot[bin_index] = 1.0
+                return one_hot
         elif encoding_method == 'continuous':
-            return np.array([collision_energy], dtype=np.float32)
+            if self.mode == 'numpy':
+                return np.array([collision_energy], dtype=np.float32)
+            else:
+                return torch.tensor([collision_energy], dtype=torch.float32)
         else:
             raise ValueError("Invalid encoding method for collision_energy.")
 
@@ -97,11 +150,20 @@ class SpectrumFeaturizer:
             bin_indices = np.digitize([retention_time], bins) - 1
             bin_index = bin_indices[0]
             bin_index = min(bin_index, len(bins) - 1)
-            one_hot = np.zeros(len(bins), dtype=np.float32)
-            one_hot[bin_index] = 1.0
-            return one_hot
+
+            if self.mode == 'numpy':
+                one_hot = np.zeros(len(bins), dtype=np.float32)
+                one_hot[bin_index] = 1.0
+                return one_hot
+            else:
+                one_hot = torch.zeros(len(bins), dtype=torch.float32)
+                one_hot[bin_index] = 1.0
+                return one_hot
         elif encoding_method == 'continuous':
-            return np.array([retention_time], dtype=np.float32)
+            if self.mode == 'numpy':
+                return np.array([retention_time], dtype=np.float32)
+            else:
+                return torch.tensor([retention_time], dtype=torch.float32)
         else:
             raise ValueError("Invalid encoding method for retention_time.")
 
@@ -118,25 +180,38 @@ class SpectrumFeaturizer:
             max_mz = np.max(mz_values)
             max_intensity = np.max(intensity_values)
             num_peaks = float(len(mz_values))
-        return np.array([mean_mz, mean_intensity, max_mz, max_intensity, num_peaks], dtype=np.float32)
+
+        if self.mode == 'numpy':
+            return np.array([mean_mz, mean_intensity, max_mz, max_intensity, num_peaks], dtype=np.float32)
+        else:
+            return torch.tensor([mean_mz, mean_intensity, max_mz, max_intensity, num_peaks], dtype=torch.float32)
 
     # Categorical Feature Methods
     def _featurize_ionmode(self, node):
         spectrum = node.spectrum
         ionmode = spectrum.get('ionmode', 'unknown') if spectrum else 'unknown'
-        ionmode_onehot = np.array([int(ionmode == mode) for mode in IONMODE_VALUES], dtype=np.float32)
+        if self.mode == 'numpy':
+            ionmode_onehot = np.array([int(ionmode == mode) for mode in IONMODE_VALUES], dtype=np.float32)
+        else:
+            ionmode_onehot = torch.tensor([int(ionmode == mode) for mode in IONMODE_VALUES], dtype=torch.float32)
         return ionmode_onehot
 
     def _featurize_adduct(self, node):
         spectrum = node.spectrum
         adduct = spectrum.get('adduct', 'unknown') if spectrum else 'unknown'
-        adduct_onehot = np.array([int(adduct == a) for a in ADDUCT_VALUES], dtype=np.float32)
+        if self.mode == 'numpy':
+            adduct_onehot = np.array([int(adduct == a) for a in ADDUCT_VALUES], dtype=np.float32)
+        else:
+            adduct_onehot = torch.tensor([int(adduct == a) for a in ADDUCT_VALUES], dtype=torch.float32)
         return adduct_onehot
 
     def _featurize_ion_source(self, node):
         spectrum = node.spectrum
         ion_source = spectrum.get('ion_source', 'unknown') if spectrum else 'unknown'
-        ion_source_onehot = np.array([int(ion_source == source) for source in ION_SOURCE_VALUES], dtype=np.float32)
+        if self.mode == 'numpy':
+            ion_source_onehot = np.array([int(ion_source == source) for source in ION_SOURCE_VALUES], dtype=np.float32)
+        else:
+            ion_source_onehot = torch.tensor([int(ion_source == source) for source in ION_SOURCE_VALUES], dtype=torch.float32)
         return ion_source_onehot
 
     # Other Feature Methods
@@ -153,7 +228,10 @@ class SpectrumFeaturizer:
 
         if formula is None:
             vector_length = len(selected_atoms) + int(include_other)
-            return np.zeros(vector_length, dtype=np.float32)
+            if self.mode == 'numpy':
+                return np.zeros(vector_length, dtype=np.float32)
+            else:
+                return torch.zeros(vector_length, dtype=torch.float32)
         else:
             return self._calculate_atom_counts(formula, selected_atoms, include_other)
 
@@ -175,7 +253,11 @@ class SpectrumFeaturizer:
         feature_vector = [counts[atom] for atom in selected_atoms]
         if include_other:
             feature_vector.append(other_atoms_count)
-        return np.array(feature_vector, dtype=np.float32)
+
+        if self.mode == 'numpy':
+            return np.array(feature_vector, dtype=np.float32)
+        else:
+            return torch.tensor(feature_vector, dtype=torch.float32)
 
 
     def _featurize_binned_peaks(self, node):
@@ -191,7 +273,10 @@ class SpectrumFeaturizer:
         num_bins = int(np.ceil(max_mz / bin_width))
 
         if peaks is None or len(peaks) == 0:
-            binned_intensities = np.zeros(num_bins, dtype=np.float32)
+            if self.mode == 'numpy':
+                binned_intensities = np.zeros(num_bins, dtype=np.float32)
+            else:
+                binned_intensities = torch.zeros(num_bins, dtype=torch.float32)
         else:
             mzs = peaks.mz
             intensities = peaks.intensities
@@ -207,15 +292,35 @@ class SpectrumFeaturizer:
             # Clip bin indices to ensure they are within the valid range
             valid_indices = np.clip(valid_indices, 0, num_bins - 1)
 
-            # Initialize an array to store the binned intensities
-            binned_intensities = np.zeros(num_bins, dtype=np.float32)
+            if self.mode == 'numpy':
+                # Initialize an array to store the binned intensities
+                binned_intensities = np.zeros(num_bins, dtype=np.float32)
+                # Use np.add.at to sum intensities in the appropriate bins
+                np.add.at(binned_intensities, valid_indices, valid_intensities)
+                # Normalize the intensities to relative intensities
+                if to_rel_intensities and np.max(binned_intensities) > 0:
+                    binned_intensities /= np.max(binned_intensities)
+            else:
+                # Initialize a tensor to store the binned intensities
+                binned_intensities = torch.zeros(num_bins, dtype=torch.float32)
+                # Convert valid_indices and valid_intensities to tensors
 
-            # Use np.add.at to sum intensities in the appropriate bins
-            np.add.at(binned_intensities, valid_indices, valid_intensities)
+                # Ensure valid_indices_tensor is of type torch.long
+                valid_indices_tensor = torch.from_numpy(valid_indices).long()
+                # Convert valid_intensities_tensor to float32 to match binned_intensities
+                valid_intensities_tensor = torch.from_numpy(valid_intensities).float()
 
-            # Normalize the intensities to relative intensities
-            if to_rel_intensities and np.max(binned_intensities) > 0:
-                binned_intensities /= np.max(binned_intensities)
+                # Ensure both tensors are on the same device as binned_intensities
+                if binned_intensities.is_cuda:
+                    valid_indices_tensor = valid_indices_tensor.to(binned_intensities.device)
+                    valid_intensities_tensor = valid_intensities_tensor.to(binned_intensities.device)
+
+                # Use scatter_add to sum intensities in the appropriate bins
+                binned_intensities = binned_intensities.scatter_add(0, valid_indices_tensor, valid_intensities_tensor)
+
+                # Normalize the intensities to relative intensities
+                if to_rel_intensities and torch.max(binned_intensities) > 0:
+                    binned_intensities /= torch.max(binned_intensities)
 
         return binned_intensities
 
