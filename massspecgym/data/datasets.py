@@ -361,6 +361,11 @@ class Tree:
             feature_tensor = featurizer.featurize(node)
             node_features.append(feature_tensor)
 
+        # Determine if features are NumPy arrays or PyTorch tensors
+        first_feature = node_features[0]
+        if isinstance(first_feature, np.ndarray):
+            node_features = [torch.from_numpy(f).float() for f in node_features]
+
         x = torch.stack(node_features)  # Shape: (num_nodes, feature_dim)
 
         # Create Data object
