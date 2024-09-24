@@ -31,6 +31,19 @@ class SpectrumFeaturizer:
                     },
                 },
             }
+        Example 3:
+            config = {
+                'features': ['collision_energy', 'ionmode', 'adduct', 'spectrum_stats', 'atom_counts'],
+                'feature_attributes': {
+                    'collision_energy': {
+                        'encoding': 'continuous',  # Options: 'binning', 'continuous'
+                    },
+                    'atom_counts': {
+                        'selected_atoms': ['C', 'H', 'O', 'N', 'S'],
+                        'include_other': True,
+                    },
+                },
+            }
         """
         self.config = config
 
@@ -41,30 +54,56 @@ class SpectrumFeaturizer:
         """
         Featurize a TreeNode into a feature vector based on the configuration.
         """
-        features = []
-
+        feature_list = []
         for feature_name in self.config.get('features', []):
             method_name = self.feature_methods.get(feature_name)
             if method_name is not None:
                 method = getattr(self, method_name)
                 feature_values = method(node)
-                features.extend(feature_values)
+                feature_list.append(feature_values)
             else:
                 raise ValueError(f"Feature '{feature_name}' is not supported.")
 
-        feature_vector = np.array(features, dtype=np.float32)
+        # Concatenate all feature arrays
+        feature_vector = np.concatenate(feature_list)
         return feature_vector
 
-    # Continuous Feature Methods
+
     def _featurize_collision_energy(self, node):
         spectrum = node.spectrum
         collision_energy = float(spectrum.get('collision_energy', 0.0)) if spectrum else 0.0
-        return [collision_energy]
+        encoding_method = self.config.get('feature_attributes', {}).get('collision_energy', {}).get('encoding', 'continuous')
+
+        if encoding_method == 'binning':
+            bins = self.config.get('feature_attributes', {}).get('collision_energy', {}).get('bins', COLLISION_ENERGY_BINS)
+            bin_indices = np.digitize([collision_energy], bins) - 1
+            bin_index = bin_indices[0]
+            bin_index = min(bin_index, len(bins) - 1)
+            one_hot = np.zeros(len(bins), dtype=np.float32)
+            one_hot[bin_index] = 1.0
+            return one_hot
+        elif encoding_method == 'continuous':
+            return np.array([collision_energy], dtype=np.float32)
+        else:
+            raise ValueError("Invalid encoding method for collision_energy.")
 
     def _featurize_retention_time(self, node):
         spectrum = node.spectrum
         retention_time = float(spectrum.get('retention_time', 0.0)) if spectrum else 0.0
-        return [retention_time]
+        encoding_method = self.config.get('feature_attributes', {}).get('retention_time', {}).get('encoding', 'continuous')
+
+        if encoding_method == 'binning':
+            bins = self.config.get('feature_attributes', {}).get('retention_time', {}).get('bins', RETENTION_TIME_BINS)
+            bin_indices = np.digitize([retention_time], bins) - 1
+            bin_index = bin_indices[0]
+            bin_index = min(bin_index, len(bins) - 1)
+            one_hot = np.zeros(len(bins), dtype=np.float32)
+            one_hot[bin_index] = 1.0
+            return one_hot
+        elif encoding_method == 'continuous':
+            return np.array([retention_time], dtype=np.float32)
+        else:
+            raise ValueError("Invalid encoding method for retention_time.")
 
     def _featurize_spectrum_stats(self, node):
         spectrum = node.spectrum
@@ -79,25 +118,25 @@ class SpectrumFeaturizer:
             max_mz = np.max(mz_values)
             max_intensity = np.max(intensity_values)
             num_peaks = float(len(mz_values))
-        return [mean_mz, mean_intensity, max_mz, max_intensity, num_peaks]
+        return np.array([mean_mz, mean_intensity, max_mz, max_intensity, num_peaks], dtype=np.float32)
 
     # Categorical Feature Methods
     def _featurize_ionmode(self, node):
         spectrum = node.spectrum
         ionmode = spectrum.get('ionmode', 'unknown') if spectrum else 'unknown'
-        ionmode_onehot = [int(ionmode == mode) for mode in IONMODE_VALUES]
+        ionmode_onehot = np.array([int(ionmode == mode) for mode in IONMODE_VALUES], dtype=np.float32)
         return ionmode_onehot
 
     def _featurize_adduct(self, node):
         spectrum = node.spectrum
         adduct = spectrum.get('adduct', 'unknown') if spectrum else 'unknown'
-        adduct_onehot = [int(adduct == a) for a in ADDUCT_VALUES]
+        adduct_onehot = np.array([int(adduct == a) for a in ADDUCT_VALUES], dtype=np.float32)
         return adduct_onehot
 
     def _featurize_ion_source(self, node):
         spectrum = node.spectrum
         ion_source = spectrum.get('ion_source', 'unknown') if spectrum else 'unknown'
-        ion_source_onehot = [int(ion_source == source) for source in ION_SOURCE_VALUES]
+        ion_source_onehot = np.array([int(ion_source == source) for source in ION_SOURCE_VALUES], dtype=np.float32)
         return ion_source_onehot
 
     # Other Feature Methods
@@ -105,13 +144,16 @@ class SpectrumFeaturizer:
         spectrum = node.spectrum
         formula = spectrum.get('formula') if spectrum else None
         atom_counts_config = self.config.get('feature_attributes', {}).get('atom_counts', {})
-        top_n_atoms = atom_counts_config.get('top_n_atoms', len(COMMON_ATOMS))
+        selected_atoms = atom_counts_config.get('selected_atoms', COMMON_ATOMS)
         include_other = atom_counts_config.get('include_other', True)
-        selected_atoms = COMMON_ATOMS[:top_n_atoms]
+
+        # Ensure selected_atoms is a list
+        if not isinstance(selected_atoms, list):
+            selected_atoms = [selected_atoms]
 
         if formula is None:
             vector_length = len(selected_atoms) + int(include_other)
-            return [0] * vector_length
+            return np.zeros(vector_length, dtype=np.float32)
         else:
             return self._calculate_atom_counts(formula, selected_atoms, include_other)
 
@@ -133,7 +175,8 @@ class SpectrumFeaturizer:
         feature_vector = [counts[atom] for atom in selected_atoms]
         if include_other:
             feature_vector.append(other_atoms_count)
-        return feature_vector
+        return np.array(feature_vector, dtype=np.float32)
+
 
     def _featurize_binned_peaks(self, node):
         spectrum = node.spectrum
@@ -148,7 +191,7 @@ class SpectrumFeaturizer:
         num_bins = int(np.ceil(max_mz / bin_width))
 
         if peaks is None or len(peaks) == 0:
-            binned_intensities = np.zeros(num_bins)
+            binned_intensities = np.zeros(num_bins, dtype=np.float32)
         else:
             mzs = peaks.mz
             intensities = peaks.intensities
@@ -165,7 +208,7 @@ class SpectrumFeaturizer:
             valid_indices = np.clip(valid_indices, 0, num_bins - 1)
 
             # Initialize an array to store the binned intensities
-            binned_intensities = np.zeros(num_bins)
+            binned_intensities = np.zeros(num_bins, dtype=np.float32)
 
             # Use np.add.at to sum intensities in the appropriate bins
             np.add.at(binned_intensities, valid_indices, valid_intensities)
@@ -174,7 +217,7 @@ class SpectrumFeaturizer:
             if to_rel_intensities and np.max(binned_intensities) > 0:
                 binned_intensities /= np.max(binned_intensities)
 
-        return binned_intensities.tolist()
+        return binned_intensities
 
     def _featurize_spectrum_embedding(self, node):
         # TODO
