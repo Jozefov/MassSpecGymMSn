@@ -4,6 +4,7 @@ import json
 import typing as T
 import numpy as np
 import torch
+from collections import deque
 import matchms
 import massspecgym.utils as utils
 from pathlib import Path
@@ -332,7 +333,6 @@ class Tree:
         edges = []
 
         # Use a queue to traverse the tree (Breadth-First Search)
-        from collections import deque
         queue = deque()
         queue.append(self.root)
         visited = set()
@@ -357,14 +357,11 @@ class Tree:
 
         # Build node features
         node_features = []
-        feature_dim = None
         for node in nodes:
-            feature_vector = featurizer.featurize(node)
-            if feature_dim is None:
-                feature_dim = len(feature_vector)
-            node_features.append(feature_vector)
+            feature_tensor = featurizer.featurize(node)
+            node_features.append(feature_tensor)
 
-        x = torch.tensor(node_features, dtype=torch.float)
+        x = torch.stack(node_features)  # Shape: (num_nodes, feature_dim)
 
         # Create Data object
         data = Data(x=x, edge_index=edge_index)
