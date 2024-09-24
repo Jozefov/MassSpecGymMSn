@@ -15,10 +15,13 @@ RETENTION_TIME_BIN_TOKENS = [f'collision_energy_bin_{i}' for i in range(len(RETE
 # Global constant for common atoms
 COMMON_ATOMS = ['C', 'H', 'O', 'N', 'S', 'P', 'Cl', 'F', 'Br', 'I', 'Si', 'B']
 
+VALUE_BINS = [0, 100, 200, 300, 400, 500, 750, 1000, 1500]
+
 CONTINUOUS_FEATURES = {
     'collision_energy': '_featurize_collision_energy',
     'retention_time': '_featurize_retention_time',
     'spectrum_stats': '_featurize_spectrum_stats',
+    'value': '_featurize_value',
 }
 
 CATEGORICAL_FEATURES = {
