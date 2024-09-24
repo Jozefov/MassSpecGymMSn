@@ -242,8 +242,7 @@ class SpectrumTransformerFeaturizer(SpectrumFeaturizer):
         if encoding_method == 'binning':
             # Define bins and assign token IDs (similar to collision_energy)
             bins = self.config.get('feature_attributes', {}).get('retention_time', {}).get('bins',
-                                                                                           [0, 1, 2, 5, 10, 20, 30, 40,
-                                                                                            50])
+                                                                                           COLLISION_ENERGY_BINS)
             bin_indices = np.digitize([retention_time], bins) - 1
             bin_index = bin_indices[0]
             bin_index = min(bin_index, len(bins) - 1)
