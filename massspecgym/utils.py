@@ -10,7 +10,8 @@ import pandas as pd
 import typing as T
 import pulp
 import os
-from collections import deque
+from collections import defaultdict, deque
+import heapq
 import uuid
 import networkx as nx
 import massspecgym.data.datasets as msgym_datasets
@@ -459,27 +460,62 @@ def create_split_file(msn_dataset, train_idxs, val_idxs, test_idxs, filepath):
     split_df.to_csv(filepath, sep='\t', index=False)
     print(f"split tsv file was created successfully at {filepath}")
 
-def count_missing_spectra(trees, top_n=10):
-        """
-        Counts how many trees contain nodes with spectrum=None and the total number of such nodes.
-        Also identifies the top_n trees with the most nodes missing spectra.
 
-        Parameters:
-            top_n (int): Number of top trees to return based on missing spectra nodes.
+def analyze_trees(trees, top_n: int = 10):
+    """
+    Analyzes a list of trees to determine both molecule-level and tree-level statistics about missing spectra.
 
-        Returns:
-            Tuple containing:
-                - Number of trees with at least one node missing spectra.
-                - Total number of nodes missing spectra across all trees.
-                - List of tuples with (Tree, number_of_missing_nodes) for top_n trees.
-        """
-        trees_with_missing = 0
-        total_missing_nodes = 0
-        tree_missing_counts = []
+    Specifically, it counts:
+        - Molecule-Level Statistics:
+            - Total number of unique molecules (based on SMILES).
+            - Number of unique molecules with at least one tree missing spectra nodes.
+            - Number of unique molecules where all trees are missing spectra nodes.
+            - Number of unique molecules with at least one complete tree (all nodes have spectra).
+            - Top_n molecules with the most trees missing spectra nodes.
+        - Tree-Level Statistics:
+            - Total number of trees.
+            - Number of trees with at least one node missing spectra.
+            - Total number of nodes missing spectra across all trees.
+            - Top_n trees with the most nodes missing spectra.
 
-        for tree in trees:
-            missing_count = 0
+    Parameters:
+        trees (List[Tree]): List of Tree instances. Each Tree must have a 'smiles' attribute.
+        top_n (int): Number of top molecules and trees to return based on missing spectra.
+
+    Returns:
+        dict: A dictionary containing both molecule-level and tree-level statistics.
+    """
+    # ------------------- Molecule-Level Statistics ------------------- #
+    smiles_to_trees = defaultdict(list)
+    skipped_trees = 0  # Counter for trees skipped due to missing data
+
+    for tree in trees:
+        # Extract SMILES from the tree
+        smiles = tree.root.spectrum.get('smiles')
+
+        # Check if SMILES is present
+        if not smiles:
+            print("Warning: Tree with missing SMILES. Skipping this tree.")
+            skipped_trees += 1
+            continue
+
+        # Group trees by their SMILES strings
+        smiles_to_trees[smiles].append(tree)
+
+    total_unique_molecules = len(smiles_to_trees)
+    unique_molecules_with_missing_spectra = 0
+    unique_molecules_all_trees_missing = 0
+    unique_molecules_with_complete_trees = 0
+    molecule_missing_counts = {}  # smiles: number of trees missing spectra
+
+    for smiles, group_trees in smiles_to_trees.items():
+        trees_missing = 0
+        trees_complete = 0
+
+        for tree in group_trees:
+            # Initialize a queue for BFS traversal
             queue = deque([tree.root])
+            missing_count = 0
 
             while queue:
                 node = queue.popleft()
@@ -489,38 +525,85 @@ def count_missing_spectra(trees, top_n=10):
                     queue.append(child)
 
             if missing_count > 0:
-                trees_with_missing += 1
-                total_missing_nodes += missing_count
-                tree_missing_counts.append((tree, missing_count))
+                trees_missing += 1
+            else:
+                trees_complete += 1
 
-        top_missing_trees = sorted(tree_missing_counts, key=lambda x: x[1], reverse=True)[:top_n]
+        if trees_missing > 0:
+            unique_molecules_with_missing_spectra += 1
+            molecule_missing_counts[smiles] = trees_missing
+        if trees_complete > 0:
+            unique_molecules_with_complete_trees += 1
+        if trees_missing == len(group_trees):
+            unique_molecules_all_trees_missing += 1
 
-        print(f"Total number of trees: {len(trees)}")
-        print(f"Number of trees containing nodes with spectrum=None: {trees_with_missing}")
-        print(f"Total number of nodes with spectrum=None: {total_missing_nodes}")
-        print(f"\nTop {top_n} trees with the most missing spectra:")
-        for idx, (tree, count) in enumerate(top_missing_trees, 1):
-            total_nodes = count_total_nodes(tree)
-            print(f"Tree {idx}: {count} missing spectra out of {total_nodes} nodes.")
+    # Identify top_n molecules with the most missing trees
+    top_missing_molecules = heapq.nlargest(top_n, molecule_missing_counts.items(), key=lambda x: x[1])
 
-        return trees_with_missing, total_missing_nodes, top_missing_trees
+    # --------------------- Tree-Level Statistics --------------------- #
+    trees_with_missing = 0
+    total_missing_nodes = 0
+    tree_missing_counts = []
 
+    for tree in trees:
+        # Initialize a queue for BFS traversal
+        queue = deque([tree.root])
+        missing_count = 0
 
-def count_total_nodes(tree):
-    """
-    Counts the total number of nodes in a tree.
-    Parameters:
-        tree (Tree): The tree to count nodes in.
-    Returns:
-        int: Total number of nodes.
-    """
-    count = 0
-    queue = deque([tree.root])
+        while queue:
+            node = queue.popleft()
+            if node.spectrum is None:
+                missing_count += 1
+            for child in node.children.values():
+                queue.append(child)
 
-    while queue:
-        node = queue.popleft()
-        count += 1
-        for child in node.children.values():
-            queue.append(child)
+        if missing_count > 0:
+            trees_with_missing += 1
+            total_missing_nodes += missing_count
+            tree_missing_counts.append((tree, missing_count))
 
-    return count
+    # Identify top_n trees with the most missing nodes
+    top_missing_trees = sorted(tree_missing_counts, key=lambda x: x[1], reverse=True)[:top_n]
+
+    # ---------------------------- Reporting --------------------------- #
+    # Molecule-Level Reporting
+    print(f"--- Molecule-Level Statistics ---")
+    print(f"Total number of unique molecules: {total_unique_molecules}")
+    print(f"Number of unique molecules with at least one tree missing spectra nodes: {unique_molecules_with_missing_spectra}")
+    print(f"Number of unique molecules where all trees have missing spectra nodes: {unique_molecules_all_trees_missing}")
+    print(f"Number of unique molecules with at least one complete tree: {unique_molecules_with_complete_trees}")
+    print(f"\nTop {top_n} molecules with the most trees missing spectra:")
+    for idx, (smiles, missing_trees) in enumerate(top_missing_molecules, 1):
+        total_trees = len(smiles_to_trees[smiles])
+        print(f"{idx}. SMILES: {smiles}, Missing Trees: {missing_trees} out of {total_trees} trees")
+
+    # Tree-Level Reporting
+    print(f"\n--- Tree-Level Statistics ---")
+    print(f"Total number of trees: {len(trees)}")
+    print(f"Number of trees containing nodes with spectrum=None: {trees_with_missing}")
+    print(f"Total number of nodes with spectrum=None: {total_missing_nodes}")
+    print(f"\nTop {top_n} trees with the most missing spectra:")
+    for idx, (tree, count) in enumerate(top_missing_trees, 1):
+        total_nodes = tree.get_total_nodes_count()
+        print(f"{idx}. Tree with root SMILES '{tree.root.spectrum.get('smiles')}': {count} missing spectra out of {total_nodes} nodes.")
+
+    print(f"\nNumber of trees skipped due to missing SMILES: {skipped_trees}")
+
+    return {
+        'molecule_level': {
+            'total_unique_molecules': total_unique_molecules,
+            'unique_molecules_with_missing_spectra': unique_molecules_with_missing_spectra,
+            'unique_molecules_all_trees_missing': unique_molecules_all_trees_missing,
+            'unique_molecules_with_complete_trees': unique_molecules_with_complete_trees,
+            'top_n_molecules_missing_trees': top_missing_molecules
+        },
+        'tree_level': {
+            'total_trees': len(trees),
+            'trees_with_missing_spectra': trees_with_missing,
+            'total_missing_nodes': total_missing_nodes,
+            'top_n_trees_missing_spectra': top_missing_trees
+        },
+        'additional': {
+            'skipped_trees_due_to_missing_smiles': skipped_trees
+        }
+    }
