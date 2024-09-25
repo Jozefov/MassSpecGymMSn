@@ -10,6 +10,7 @@ import pandas as pd
 import typing as T
 import pulp
 import os
+from collections import deque
 import uuid
 import networkx as nx
 import massspecgym.data.datasets as msgym_datasets
@@ -457,3 +458,69 @@ def create_split_file(msn_dataset, train_idxs, val_idxs, test_idxs, filepath):
     split_df = pd.concat([split_df, pd.DataFrame(rows)], ignore_index=True)
     split_df.to_csv(filepath, sep='\t', index=False)
     print(f"split tsv file was created successfully at {filepath}")
+
+def count_missing_spectra(trees, top_n=10):
+        """
+        Counts how many trees contain nodes with spectrum=None and the total number of such nodes.
+        Also identifies the top_n trees with the most nodes missing spectra.
+
+        Parameters:
+            top_n (int): Number of top trees to return based on missing spectra nodes.
+
+        Returns:
+            Tuple containing:
+                - Number of trees with at least one node missing spectra.
+                - Total number of nodes missing spectra across all trees.
+                - List of tuples with (Tree, number_of_missing_nodes) for top_n trees.
+        """
+        trees_with_missing = 0
+        total_missing_nodes = 0
+        tree_missing_counts = []
+
+        for tree in trees:
+            missing_count = 0
+            queue = deque([tree.root])
+
+            while queue:
+                node = queue.popleft()
+                if node.spectrum is None:
+                    missing_count += 1
+                for child in node.children.values():
+                    queue.append(child)
+
+            if missing_count > 0:
+                trees_with_missing += 1
+                total_missing_nodes += missing_count
+                tree_missing_counts.append((tree, missing_count))
+
+        top_missing_trees = sorted(tree_missing_counts, key=lambda x: x[1], reverse=True)[:top_n]
+
+        print(f"Total number of trees: {len(trees)}")
+        print(f"Number of trees containing nodes with spectrum=None: {trees_with_missing}")
+        print(f"Total number of nodes with spectrum=None: {total_missing_nodes}")
+        print(f"\nTop {top_n} trees with the most missing spectra:")
+        for idx, (tree, count) in enumerate(top_missing_trees, 1):
+            total_nodes = count_total_nodes(tree)
+            print(f"Tree {idx}: {count} missing spectra out of {total_nodes} nodes.")
+
+        return trees_with_missing, total_missing_nodes, top_missing_trees
+
+
+def count_total_nodes(tree):
+    """
+    Counts the total number of nodes in a tree.
+    Parameters:
+        tree (Tree): The tree to count nodes in.
+    Returns:
+        int: Total number of nodes.
+    """
+    count = 0
+    queue = deque([tree.root])
+
+    while queue:
+        node = queue.popleft()
+        count += 1
+        for child in node.children.values():
+            queue.append(child)
+
+    return count
