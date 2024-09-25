@@ -295,6 +295,18 @@ class Tree:
     def get_depth(self):
         return self.root.get_depth()
 
+    def get_total_nodes_count(self) -> int:
+        count = 0
+        queue = deque([self.root])
+
+        while queue:
+            node = queue.popleft()
+            count += 1
+            for child in node.children.values():
+                queue.append(child)
+
+        return count
+
     def get_branching_factor(self):
         return self.root.get_branching_factor()
 
