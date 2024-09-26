@@ -13,6 +13,7 @@ RETENTION_TIME_BINS = [0, 20, 40, 60, 80, 100]
 RETENTION_TIME_BIN_TOKENS = [f'collision_energy_bin_{i}' for i in range(len(RETENTION_TIME_BINS))]
 
 # Global constant for common atoms
+# 'Unknown' is solved in _featurize_atom_counts, as we can choose from atoms we want to include +1 unknown
 COMMON_ATOMS = ['C', 'H', 'O', 'N', 'S', 'P', 'Cl', 'F', 'Br', 'I', 'Si', 'B']
 
 VALUE_BINS = [0, 100, 200, 300, 400, 500, 750, 1000, 1500]

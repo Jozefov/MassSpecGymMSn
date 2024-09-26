@@ -6,6 +6,7 @@ import matplotlib.colors
 import matplotlib.cm as cm
 import matplotlib.colors as mcolors
 import matplotlib.ticker as ticker
+from matplotlib.patches import Patch
 import pandas as pd
 import typing as T
 import pulp
@@ -371,28 +372,28 @@ class MyopicMCES():
         return dist
 
 
-def visualize_MSn_tree(tree, figsize=(12, 8)):
-    def add_path_to_graph(graph, path):
-        path_nodes = []
-        for i, label in enumerate(path):
-            label = f"{label:.3f}"
-            parent_nodes = "_".join(path_nodes)
-            node_name = f"{parent_nodes}_{label}" if parent_nodes else label
-            graph.add_node(node_name, label=label)
-            if path_nodes:
-                graph.add_edge(path_nodes[-1], node_name)
-            path_nodes.append(node_name)
-
-    G = nx.DiGraph()
-    for path in tree.paths:
-        add_path_to_graph(G, path)
-    
-    pos = nx.bfs_layout(G, list(G.nodes)[0])
-    labels = {node: G.nodes[node]['label'] for node in G.nodes}
-    plt.figure(figsize=figsize)
-    nx.draw(G, pos, labels=labels, with_labels=True, node_size=3000,
-            node_color="lightblue", font_size=10, font_weight="bold", arrows=True)
-    plt.show() 
+# def visualize_MSn_tree(tree, figsize=(12, 8)):
+#     def add_path_to_graph(graph, path):
+#         path_nodes = []
+#         for i, label in enumerate(path):
+#             label = f"{label:.3f}"
+#             parent_nodes = "_".join(path_nodes)
+#             node_name = f"{parent_nodes}_{label}" if parent_nodes else label
+#             graph.add_node(node_name, label=label)
+#             if path_nodes:
+#                 graph.add_edge(path_nodes[-1], node_name)
+#             path_nodes.append(node_name)
+#
+#     G = nx.DiGraph()
+#     for path in tree.paths:
+#         add_path_to_graph(G, path)
+#
+#     pos = nx.bfs_layout(G, list(G.nodes)[0])
+#     labels = {node: G.nodes[node]['label'] for node in G.nodes}
+#     plt.figure(figsize=figsize)
+#     nx.draw(G, pos, labels=labels, with_labels=True, node_size=3000,
+#             node_color="lightblue", font_size=10, font_weight="bold", arrows=True)
+#     plt.show()
 
 
 def smiles_to_scaffold(smiles):
@@ -462,23 +463,18 @@ def create_split_file(msn_dataset, train_idxs, val_idxs, test_idxs, filepath):
     print(f"split tsv file was created successfully at {filepath}")
 
 
-def find_max_deviation(deviations):
+def find_max_deviation(deviations: T.List[T.Tuple[str, float, float, float]]) -> T.Optional[T.Dict]:
     """
-    Finds and returns the dictionary with the maximum 'deviation' value in the deviations list.
+    Finds and returns the tuple with the maximum 'deviation' value in the deviations list.
 
     Parameters:
-        deviations (List[Dict]):
-            A list of dictionaries, each containing at least a 'deviation' key.
-            Example:
-                [
-                    {'deviation': 0.004, 'desired_value': 1.0, 'actual_value': 1.004},
-                    {'deviation': 0.006, 'desired_value': 2.0, 'actual_value': 2.006},
-                    ...
-                ]
+        deviations (List[Tuple[str, float, float, float]]):
+            A list of tuples, each containing:
+                (identifier, desired_value, actual_value, deviation)
 
     Returns:
         Optional[Dict]:
-            The dictionary with the highest 'deviation' value.
+            A dictionary with keys 'identifier', 'desired_value', 'actual_value', 'deviation'.
             Returns `None` if the input list is empty.
     """
     if not deviations:
@@ -486,50 +482,31 @@ def find_max_deviation(deviations):
         return None
 
     # Initialize variables to track the maximum deviation
-    max_deviation_dict = None
+    max_deviation_tuple = None
     max_deviation_value = -float('inf')  # Start with negative infinity
 
-    for deviation_dict in deviations:
-        # Extract the deviation value; default to 0 if not present
-        deviation = deviation_dict.get('deviation', 0)
+    for deviation in deviations:
+        identifier, desired_value, actual_value, dev = deviation
+        if dev > max_deviation_value:
+            max_deviation_value = dev
+            max_deviation_tuple = deviation
 
-        # Check if the current deviation is greater than the maximum found so far
-        if deviation > max_deviation_value:
-            max_deviation_value = deviation
-            max_deviation_dict = deviation_dict
-
-    if max_deviation_dict is not None:
+    if max_deviation_tuple is not None:
         print(f"Maximum deviation found: {max_deviation_value}")
+        return {
+            'identifier': max_deviation_tuple[0],
+            'desired_value': max_deviation_tuple[1],
+            'actual_value': max_deviation_tuple[2],
+            'deviation': max_deviation_tuple[3]
+        }
     else:
-        print("No valid 'deviation' keys found in the dictionaries.")
+        print("No valid deviations found.")
+        return None
 
-    return max_deviation_dict
 
 def analyze_trees( trees, mgf_file_path, spectype = 'ALL_ENERGIES', deviations = None, top_n = 10):
     """
     Analyzes a list of trees and an MGF file to determine molecule-level, tree-level, and spectra-level statistics about missing spectra.
-
-    Specifically, it counts:
-        - Molecule-Level Statistics:
-            - Total number of unique molecules (based on SMILES).
-            - Number of unique molecules with at least one tree missing spectra nodes.
-            - Number of unique molecules where all trees are missing spectra nodes.
-            - Number of unique molecules with at least one complete tree (all nodes have spectra).
-            - Top_n molecules with the most trees missing spectra nodes.
-        - Tree-Level Statistics:
-            - Total number of trees.
-            - Number of trees with at least one node missing spectra.
-            - Total number of nodes missing spectra across all trees.
-            - Top_n trees with the most nodes missing spectra.
-        - Spectra-Level Statistics:
-            - Total number of spectra in the original MGF file with SPECTYPE=ALL_ENERGIES.
-            - Total number of spectra present in trees (nodes with spectrum not None).
-            - Number of unique spectra in trees.
-            - Number of spectra missing from trees (present in MGF but not in trees).
-            - Number of extra spectra in trees (present in trees but not in MGF).
-            - Uniqueness of spectra in trees based on 'IDENTIFIER'.
-        - Deviation Statistics (Optional):
-            - Dictionary with the maximum deviation, if deviations are provided and not None.
 
     Parameters:
         trees (List[Tree]): List of Tree instances. Each Tree must have a 'smiles' attribute.
@@ -543,13 +520,11 @@ def analyze_trees( trees, mgf_file_path, spectype = 'ALL_ENERGIES', deviations =
     """
     # ------------------- Molecule-Level Statistics ------------------- #
     smiles_to_trees = defaultdict(list)
-    skipped_trees = 0  # Counter for trees skipped due to missing data
+    skipped_trees = 0
 
     for tree in trees:
-        # Extract SMILES from the tree
-        smiles = tree.root.spectra.get['smiles']
+        smiles = tree.root.spectrum.get('smiles')
 
-        # Check if SMILES is present
         if not smiles:
             print("Warning: Tree with missing SMILES. Skipping this tree.")
             skipped_trees += 1
@@ -562,7 +537,7 @@ def analyze_trees( trees, mgf_file_path, spectype = 'ALL_ENERGIES', deviations =
     unique_molecules_with_missing_spectra = 0
     unique_molecules_all_trees_missing = 0
     unique_molecules_with_complete_trees = 0
-    molecule_missing_counts = {}  # smiles: number of trees missing spectra
+    molecule_missing_counts = {}
 
     for smiles, group_trees in smiles_to_trees.items():
         trees_missing = 0
@@ -622,7 +597,6 @@ def analyze_trees( trees, mgf_file_path, spectype = 'ALL_ENERGIES', deviations =
     top_missing_trees = sorted(tree_missing_counts, key=lambda x: x[1], reverse=True)[:top_n]
 
     # ------------------- Spectra-Level Statistics ------------------- #
-    # Read the MGF file and collect spectra with SPECTYPE=ALL_ENERGIES
     spectra_in_mgf = set()
     total_spectra_in_mgf = 0
 
@@ -659,7 +633,6 @@ def analyze_trees( trees, mgf_file_path, spectype = 'ALL_ENERGIES', deviations =
             for child in node.children.values():
                 queue.append(child)
 
-    # Populate the set of spectra in trees
     spectra_in_trees = set(all_identifiers_in_trees)
     total_spectra_in_trees = len(all_identifiers_in_trees)
     unique_spectra_in_trees = len(spectra_in_trees)
@@ -670,6 +643,17 @@ def analyze_trees( trees, mgf_file_path, spectype = 'ALL_ENERGIES', deviations =
 
     # Check if all spectra in trees are unique
     all_unique_in_trees = len(all_identifiers_in_trees) == unique_spectra_in_trees
+
+    # ------------------- Deviation Analysis ------------------- #
+    if deviations is None:
+        # Aggregate deviations from all trees
+        deviations = []
+        for tree in trees:
+            deviations.extend(tree.deviations)
+
+    # Find the maximum deviation if deviations are present
+    max_deviation = find_max_deviation(deviations) if deviations else None
+
 
     # ---------------------------- Reporting --------------------------- #
     # Molecule-Level Reporting
@@ -691,7 +675,7 @@ def analyze_trees( trees, mgf_file_path, spectype = 'ALL_ENERGIES', deviations =
     print(f"\nTop {top_n} trees with the most missing spectra:")
     for idx, (tree, count) in enumerate(top_missing_trees, 1):
         total_nodes = tree.get_total_nodes_count()
-        print(f"{idx}. Tree with root SMILES '{tree.root.spectra.get['smiles']}': {count} missing spectra out of {total_nodes} nodes.")
+        print(f"{idx}. Tree with root SMILES '{tree.root.spectrum.get('smiles')}': {count} missing spectra out of {total_nodes} nodes.")
 
     # Spectra-Level Reporting
     print(f"\n--- Spectra-Level Statistics ---")
@@ -719,15 +703,14 @@ def analyze_trees( trees, mgf_file_path, spectype = 'ALL_ENERGIES', deviations =
         print("All spectra in trees are unique based on 'IDENTIFIER'.")
 
     # Deviation Statistics Reporting
-    if deviations is not None:
-        max_dev_dict = find_max_deviation(deviations)
-        if max_dev_dict is not None:
-            print(f"\n--- Deviation Statistics ---")
-            print(f"Maximum deviation found: {max_dev_dict.get('deviation')}")
-            print(f"Desired Value: {max_dev_dict.get('desired_value')}")
-            print(f"Actual Value: {max_dev_dict.get('actual_value')}")
+    if max_deviation:
+        print(f"\n--- Deviation Statistics ---")
+        print(f"Maximum deviation found at tree: {max_deviation['identifier']}")
+        print(f"Maximum deviation found: {max_deviation['deviation']}")
+        print(f"Desired Value: {max_deviation['desired_value']}")
+        print(f"Actual Value: {max_deviation['actual_value']}")
     else:
-        print("\nNo deviations provided. Skipping maximum deviation analysis.")
+        print("\nNo deviations recorded.")
 
     # Additional Reporting
     print(f"\nNumber of trees skipped due to missing SMILES: {skipped_trees}")
@@ -757,9 +740,162 @@ def analyze_trees( trees, mgf_file_path, spectype = 'ALL_ENERGIES', deviations =
             'duplicate_identifiers': list(duplicate_identifiers) if not all_unique_in_trees else []
         },
         'deviation_statistics': {
-            'max_deviation': max_dev_dict if deviations is not None else None
+            'max_deviation': max_deviation if deviations is not None else None
         },
         'additional': {
             'skipped_trees_due_to_missing_smiles': skipped_trees
         }
     }
+
+
+def assign_positions(G, root):
+    """
+    Assigns positions to nodes in a hierarchical layout.
+
+    Parameters:
+        G (nx.DiGraph): The tree graph.
+        root (node): The root node of the tree.
+
+    Returns:
+        dict: A dictionary mapping nodes to positions.
+    """
+    pos = {}
+    x = 0
+
+    def assign_x(node, depth):
+        nonlocal x
+        children = list(G.successors(node))
+        if not children:
+            pos[node] = (x, -depth)
+            x += 1
+        else:
+            for child in children:
+                assign_x(child, depth + 1)
+            child_x = [pos[child][0] for child in children]
+            pos[node] = (sum(child_x) / len(child_x), -depth)
+
+    assign_x(root, 0)
+    return pos
+
+
+def is_tree(G: nx.DiGraph) -> bool:
+    """
+    Checks if a given directed graph is a tree.
+
+    Parameters:
+        G (nx.DiGraph): The directed graph to check.
+
+    Returns:
+        bool: True if G is a tree, False otherwise.
+    """
+    # A directed tree must be a directed acyclic graph (DAG) with exactly one root
+    if not nx.is_directed_acyclic_graph(G):
+        print("Graph is not a Directed Acyclic Graph (DAG).")
+        return False
+
+    # Identify potential roots (nodes with in_degree 0)
+    roots = [n for n, d in G.in_degree() if d == 0]
+    if len(roots) != 1:
+        print(f"Graph has {len(roots)} roots; a tree must have exactly one root.")
+        return False
+
+    # Check if all nodes are reachable from the root
+    root = roots[0]
+    descendants = nx.descendants(G, root)
+    if len(descendants) + 1 != len(G.nodes()):
+        print("Not all nodes are reachable from the root.")
+        return False
+
+    return True
+
+
+def visualize_tree(tree, save_path=None, figsize=(50, 40), dpi=300):
+    """
+    Visualizes the tree with hierarchical layout.
+    Nodes with spectrum=None are colored red, others are colored blue.
+    For large trees, it can save the visualization as a high-resolution image.
+
+    Parameters:
+        tree (Tree): The tree to visualize.
+        save_path (str, optional): Path to save the image. If None, displays the plot.
+        figsize (tuple, optional): Size of the matplotlib figure.
+        dpi (int, optional): Resolution of the saved image.
+    """
+    G = nx.DiGraph()
+    queue = deque()
+    queue.append(tree.root)
+    visited = set()
+
+    while queue:
+        node = queue.popleft()
+        if id(node) in visited:
+            continue
+        visited.add(id(node))
+        G.add_node(id(node), value=node.value, spectrum=node.spectrum)
+        for child in node.children.values():
+            G.add_edge(id(node), id(child))
+            queue.append(child)
+
+    try:
+        if not is_tree(G):
+            print("Warning: The graph is not a tree. Visualization may not be accurate.")
+    except Exception as e:
+        print(f"Error checking if graph is a tree: {e}")
+
+    node_colors = []
+    for node in G.nodes(data=True):
+        if node[1]['spectrum'] is None:
+            node_colors.append('red')
+        else:
+            node_colors.append('blue')
+
+    label_counts = defaultdict(int)
+    labels = {}
+    for node_id, attrs in G.nodes(data=True):
+        label = f"{attrs['value']:.3f}"
+        count = label_counts[label]
+        unique_label = f"{count}.{label}" if count > 0 else label
+        labels[node_id] = unique_label
+        label_counts[label] += 1
+
+    try:
+        root_node = id(tree.root)
+        pos = assign_positions(G, root_node)
+    except ValueError as ve:
+        print(f"Error in hierarchical layout: {ve}")
+        print("Falling back to spring layout.")
+        pos = nx.spring_layout(G, seed=42)
+    except Exception as e:
+        print(f"Unexpected error in hierarchical layout: {e}")
+        pos = nx.spring_layout(G, seed=42)
+
+    if save_path:
+        plt.figure(figsize=figsize, dpi=dpi)
+    else:
+        plt.figure(figsize=figsize)
+
+    nx.draw_networkx_nodes(G, pos, node_color=node_colors, node_size=500, alpha=0.8)
+
+    nx.draw_networkx_edges(G, pos, arrowstyle='->', arrowsize=15, edge_color='gray')
+
+    nx.draw_networkx_labels(G, pos, labels, font_size=6)
+
+    legend_elements = [
+        Patch(facecolor='blue', edgecolor='black', label='Spectrum Present'),
+        Patch(facecolor='red', edgecolor='black', label='Spectrum Missing')
+    ]
+    plt.legend(handles=legend_elements, loc='best')
+
+    plt.title("Tree Visualization with Missing Spectra Nodes Highlighted")
+    plt.axis('off')
+    plt.tight_layout()
+
+    if save_path:
+        plt.savefig(save_path, dpi=dpi, bbox_inches='tight')
+        print(f"Tree visualization saved to {save_path}")
+    else:
+        plt.show()
+
+    plt.close()
+
+

@@ -221,19 +221,44 @@ class TreeNode:
             ret += child.__repr__(level + 1)
         return ret
 
+    # def get_child(self, child_value) -> 'TreeNode':
+    #     if child_value in self.children:
+    #         return self.children[child_value]
+    #     else:
+    #         raise ValueError(f"Child with value {child_value} not found in children of node with value {self.value}")
+    #
+    # def add_child(self, child_value, spectrum=None) -> 'TreeNode':
+    #     if child_value in self.children:
+    #         child_node = self.children[child_value]
+    #         if spectrum is not None:
+    #             if child_node.spectrum is not None and child_node.spectrum != spectrum:
+    #                 # If the node already has a spectrum, and it's different, throw an error
+    #                 raise ValueError(f"Node with value {child_value} already has a spectrum.")
+    #             else:
+    #                 child_node.spectrum = spectrum
+    #         return child_node
+    #     else:
+    #         # Create new child node with the spectrum (could be None)
+    #         child_node = TreeNode(child_value, spectrum=spectrum)
+    #         self.children[child_value] = child_node
+    #         return child_node
+
     def get_child(self, child_value) -> 'TreeNode':
-        if child_value in self.children:
-            return self.children[child_value]
+        key = round(child_value, 3)
+        if key in self.children:
+            return self.children[key]
         else:
             raise ValueError(f"Child with value {child_value} not found in children of node with value {self.value}")
 
     def add_child(self, child_value, spectrum=None) -> 'TreeNode':
+        # If child spectrum is None assign spectrum, if it is not None check is same or not add save as conflict
         if child_value in self.children:
             child_node = self.children[child_value]
             if spectrum is not None:
                 if child_node.spectrum is not None and child_node.spectrum != spectrum:
-                    # If the node already has a spectrum, and it's different, throw an error
-                    raise ValueError(f"Node with value {child_value} already has a spectrum.")
+                    # Keep the existing spectrum, do not overwrite
+                    print(f"spectrum conflict at {spectrum.get('identifier')} and"
+                          f" {child_node.spectrum.get('identifier')} identifiers")
                 else:
                     child_node.spectrum = spectrum
             return child_node
@@ -242,6 +267,23 @@ class TreeNode:
             child_node = TreeNode(child_value, spectrum=spectrum)
             self.children[child_value] = child_node
             return child_node
+
+    def get_child_closest(self, target_value) -> Tuple[Optional['TreeNode'], Optional[float]]:
+        """
+        Return the child node whose value is closest to target_value.
+        Also return the deviation (absolute difference between target_value and child_node.value).
+        """
+        if not self.children:
+            return None, None
+        else:
+            closest_child = None
+            min_deviation = float('inf')
+            for child in self.children.values():
+                deviation = abs(child.value - target_value)
+                if deviation < min_deviation:
+                    min_deviation = deviation
+                    closest_child = child
+            return closest_child, min_deviation
 
     def get_depth(self) -> int:
         if not self.children:
@@ -265,9 +307,10 @@ class TreeNode:
 
 
 class Tree:
-    def __init__(self, root: float, spectrum=None):
+    def __init__(self, root: float, spectrum=None, max_allowed_deviation: float = 0.005):
         self.root = TreeNode(root, spectrum=spectrum)
-        # self.paths = []
+        self.max_allowed_deviation = max_allowed_deviation
+        self.deviations = []
 
     def __repr__(self):
         return repr(self.root)
@@ -280,6 +323,18 @@ class Tree:
         for node in path:
             current_node = current_node.add_child(node)
 
+    # def add_path_with_spectrum(self, path: List[float], spectrum: matchms.Spectrum) -> None:
+    #     if path[0] == self.root.value:
+    #         path = path[1:]  # Skip the root node if it's in the path
+    #     current_node = self.root
+    #     for i, node_value in enumerate(path):
+    #         if i == len(path) - 1:
+    #             # Last node in the path, associate the spectrum
+    #             current_node = current_node.add_child(node_value, spectrum)
+    #         else:
+    #             # Intermediate nodes: create them if they don't exist, with spectrum=None
+    #             current_node = current_node.add_child(node_value)
+
     def add_path_with_spectrum(self, path: List[float], spectrum: matchms.Spectrum) -> None:
         if path[0] == self.root.value:
             path = path[1:]  # Skip the root node if it's in the path
@@ -287,10 +342,43 @@ class Tree:
         for i, node_value in enumerate(path):
             if i == len(path) - 1:
                 # Last node in the path, associate the spectrum
-                current_node = current_node.add_child(node_value, spectrum)
+                # Check if the node exists
+                if node_value in current_node.children:
+                    child_node = current_node.children[node_value]
+                    if child_node.spectrum is None:
+                        # Assign the spectrum to the existing node
+                        child_node.spectrum = spectrum
+                    else:
+                        # Node already has a spectrum; handle conflict if necessary
+                        if child_node.spectrum != spectrum:
+                            # Record the conflict (optional)
+                            print(f"spectrum conflict at {child_node.spectrum.get('identifier')} and"
+                                  f" {spectrum.get('identifier')} identifiers")
+                            # Keep the existing spectrum
+                else:
+                    # Create a new child node with the spectrum
+                    child_node = current_node.add_child(node_value, spectrum)
+                current_node = child_node
             else:
-                # Intermediate nodes: create them if they don't exist, with spectrum=None
-                current_node = current_node.add_child(node_value)
+                # Intermediate nodes
+                if current_node.children:
+                    # Find the child with the closest value
+                    child_node, deviation = current_node.get_child_closest(node_value)
+                    if child_node is None or deviation > self.max_allowed_deviation:
+                        # Create a new node with spectrum=None
+                        child_node = current_node.add_child(node_value, spectrum=None)
+
+                    self.deviations.append((
+                        self.root.spectrum.get('identifier') if self.root.spectrum else 'Unknown',
+                        node_value,
+                        child_node.value,
+                        deviation if child_node.value != node_value else 0.0
+                    ))
+                    current_node = child_node
+                else:
+                    # No children, create a new node with spectrum=None
+                    child_node = current_node.add_child(node_value, spectrum=None)
+                    current_node = child_node
 
     def get_depth(self):
         return self.root.get_depth()
@@ -387,11 +475,13 @@ class Tree:
 
 
 class MSnDataset(MassSpecDataset):
-    def __init__(self, pth=None, dtype=torch.float32, mol_transform=None, featurizer=None):
+    def __init__(self, pth=None, dtype=torch.float32, mol_transform=None, featurizer=None,
+                 max_allowed_deviation: float = 0.005):
         self.mol_transform = mol_transform
 
         # load dataset using the parent class
         super().__init__(pth=pth)
+        self.max_allowed_deviation = max_allowed_deviation
         self.metadata = self.metadata[self.metadata["spectype"] == "ALL_ENERGIES"]
 
         # TODO: add identifiers (and split?) to the mgf file
@@ -475,22 +565,14 @@ class MSnDataset(MassSpecDataset):
 
         return all_tree_paths
     
-    # def _generate_trees(self, dataset_all_tree_paths: List[Tuple[str, float, List[List[float]]]]) \
-    #         -> Tuple[List['Tree'], List[Data], List[str]]:
-    #     trees = []
-    #     pyg_trees = []
-    #     smiles = []
-    #
-    #     for smi, root, paths in dataset_all_tree_paths:
-    #         tree = Tree(root)
-    #         for path in paths:
-    #             tree.add_path(path)
-    #         pyg_tree = tree.to_pyg_data()
-    #         trees.append(tree)
-    #         pyg_trees.append(pyg_tree)
-    #         smiles.append(smi)
-    #
-    #     return trees, pyg_trees, smiles
+    def get_all_deviations(self) -> List[Tuple[str, float, float, float]]:
+        """
+        Aggregates all deviations from all trees into a single list.
+        """
+        all_deviations = []
+        for tree in self.trees:
+            all_deviations.extend(tree.deviations)
+        return all_deviations
 
     def _generate_trees(self, dataset_all_tree_paths: List[Tuple[str, float, List[Tuple[List[float], matchms.Spectrum]], matchms.Spectrum]]) \
             -> Tuple[List['Tree'], List['Data'], List[str]]:
@@ -499,7 +581,9 @@ class MSnDataset(MassSpecDataset):
         pyg_trees = []
 
         for smi, root_precursor_mz, paths, root_spectrum in dataset_all_tree_paths:
-            tree = Tree(root_precursor_mz, spectrum=root_spectrum)
+            tree = Tree(root_precursor_mz, spectrum=root_spectrum,
+                        max_allowed_deviation=self.max_allowed_deviation)
+
             for path, spectrum in paths:
                 tree.add_path_with_spectrum(path, spectrum)
 
@@ -509,6 +593,7 @@ class MSnDataset(MassSpecDataset):
             smiles.append(smi)
 
         return trees, pyg_trees, smiles
+
 
     def _get_tree_depths(self, trees):
         return [tree.get_depth() for tree in trees]
