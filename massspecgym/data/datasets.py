@@ -221,28 +221,6 @@ class TreeNode:
             ret += child.__repr__(level + 1)
         return ret
 
-    # def get_child(self, child_value) -> 'TreeNode':
-    #     if child_value in self.children:
-    #         return self.children[child_value]
-    #     else:
-    #         raise ValueError(f"Child with value {child_value} not found in children of node with value {self.value}")
-    #
-    # def add_child(self, child_value, spectrum=None) -> 'TreeNode':
-    #     if child_value in self.children:
-    #         child_node = self.children[child_value]
-    #         if spectrum is not None:
-    #             if child_node.spectrum is not None and child_node.spectrum != spectrum:
-    #                 # If the node already has a spectrum, and it's different, throw an error
-    #                 raise ValueError(f"Node with value {child_value} already has a spectrum.")
-    #             else:
-    #                 child_node.spectrum = spectrum
-    #         return child_node
-    #     else:
-    #         # Create new child node with the spectrum (could be None)
-    #         child_node = TreeNode(child_value, spectrum=spectrum)
-    #         self.children[child_value] = child_node
-    #         return child_node
-
     def get_child(self, child_value) -> 'TreeNode':
         key = round(child_value, 3)
         if key in self.children:
@@ -322,18 +300,6 @@ class Tree:
         current_node = self.root
         for node in path:
             current_node = current_node.add_child(node)
-
-    # def add_path_with_spectrum(self, path: List[float], spectrum: matchms.Spectrum) -> None:
-    #     if path[0] == self.root.value:
-    #         path = path[1:]  # Skip the root node if it's in the path
-    #     current_node = self.root
-    #     for i, node_value in enumerate(path):
-    #         if i == len(path) - 1:
-    #             # Last node in the path, associate the spectrum
-    #             current_node = current_node.add_child(node_value, spectrum)
-    #         else:
-    #             # Intermediate nodes: create them if they don't exist, with spectrum=None
-    #             current_node = current_node.add_child(node_value)
 
     def add_path_with_spectrum(self, path: List[float], spectrum: matchms.Spectrum) -> None:
         if path[0] == self.root.value:
