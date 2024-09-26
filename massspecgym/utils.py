@@ -12,6 +12,7 @@ import pulp
 import os
 from collections import defaultdict, deque
 import heapq
+from matchms.importing import load_from_mgf
 import uuid
 import networkx as nx
 import massspecgym.data.datasets as msgym_datasets
@@ -461,9 +462,52 @@ def create_split_file(msn_dataset, train_idxs, val_idxs, test_idxs, filepath):
     print(f"split tsv file was created successfully at {filepath}")
 
 
-def analyze_trees(trees, top_n: int = 10):
+def find_max_deviation(deviations):
     """
-    Analyzes a list of trees to determine both molecule-level and tree-level statistics about missing spectra.
+    Finds and returns the dictionary with the maximum 'deviation' value in the deviations list.
+
+    Parameters:
+        deviations (List[Dict]):
+            A list of dictionaries, each containing at least a 'deviation' key.
+            Example:
+                [
+                    {'deviation': 0.004, 'desired_value': 1.0, 'actual_value': 1.004},
+                    {'deviation': 0.006, 'desired_value': 2.0, 'actual_value': 2.006},
+                    ...
+                ]
+
+    Returns:
+        Optional[Dict]:
+            The dictionary with the highest 'deviation' value.
+            Returns `None` if the input list is empty.
+    """
+    if not deviations:
+        print("The deviations list is empty. No maximum deviation found.")
+        return None
+
+    # Initialize variables to track the maximum deviation
+    max_deviation_dict = None
+    max_deviation_value = -float('inf')  # Start with negative infinity
+
+    for deviation_dict in deviations:
+        # Extract the deviation value; default to 0 if not present
+        deviation = deviation_dict.get('deviation', 0)
+
+        # Check if the current deviation is greater than the maximum found so far
+        if deviation > max_deviation_value:
+            max_deviation_value = deviation
+            max_deviation_dict = deviation_dict
+
+    if max_deviation_dict is not None:
+        print(f"Maximum deviation found: {max_deviation_value}")
+    else:
+        print("No valid 'deviation' keys found in the dictionaries.")
+
+    return max_deviation_dict
+
+def analyze_trees( trees, mgf_file_path, spectype = 'ALL_ENERGIES', deviations = None, top_n = 10):
+    """
+    Analyzes a list of trees and an MGF file to determine molecule-level, tree-level, and spectra-level statistics about missing spectra.
 
     Specifically, it counts:
         - Molecule-Level Statistics:
@@ -477,13 +521,25 @@ def analyze_trees(trees, top_n: int = 10):
             - Number of trees with at least one node missing spectra.
             - Total number of nodes missing spectra across all trees.
             - Top_n trees with the most nodes missing spectra.
+        - Spectra-Level Statistics:
+            - Total number of spectra in the original MGF file with SPECTYPE=ALL_ENERGIES.
+            - Total number of spectra present in trees (nodes with spectrum not None).
+            - Number of unique spectra in trees.
+            - Number of spectra missing from trees (present in MGF but not in trees).
+            - Number of extra spectra in trees (present in trees but not in MGF).
+            - Uniqueness of spectra in trees based on 'IDENTIFIER'.
+        - Deviation Statistics (Optional):
+            - Dictionary with the maximum deviation, if deviations are provided and not None.
 
     Parameters:
         trees (List[Tree]): List of Tree instances. Each Tree must have a 'smiles' attribute.
-        top_n (int): Number of top molecules and trees to return based on missing spectra.
+        mgf_file_path (str): Path to the original MGF file.
+        spectype (str, optional): The spectype to filter spectra in the MGF file. Defaults to 'ALL_ENERGIES'.
+        deviations (List[Dict], optional): List of deviation dictionaries to find the maximum deviation.
+        top_n (int, optional): Number of top molecules and trees to return based on missing spectra. Defaults to 10.
 
     Returns:
-        dict: A dictionary containing both molecule-level and tree-level statistics.
+        dict: A dictionary containing molecule-level, tree-level, spectra-level, and deviation statistics.
     """
     # ------------------- Molecule-Level Statistics ------------------- #
     smiles_to_trees = defaultdict(list)
@@ -491,7 +547,7 @@ def analyze_trees(trees, top_n: int = 10):
 
     for tree in trees:
         # Extract SMILES from the tree
-        smiles = tree.root.spectrum.get('smiles')
+        smiles = tree.root.spectra.get['smiles']
 
         # Check if SMILES is present
         if not smiles:
@@ -565,6 +621,56 @@ def analyze_trees(trees, top_n: int = 10):
     # Identify top_n trees with the most missing nodes
     top_missing_trees = sorted(tree_missing_counts, key=lambda x: x[1], reverse=True)[:top_n]
 
+    # ------------------- Spectra-Level Statistics ------------------- #
+    # Read the MGF file and collect spectra with SPECTYPE=ALL_ENERGIES
+    spectra_in_mgf = set()
+    total_spectra_in_mgf = 0
+
+    try:
+        spectra = list(load_from_mgf(mgf_file_path))
+        for spec in spectra:
+            if spec.get('spectype') == spectype:
+                identifier = spec.get('identifier')
+                if identifier:
+                    spectra_in_mgf.add(identifier)
+                    total_spectra_in_mgf += 1
+    except FileNotFoundError:
+        print(f"Error: MGF file not found at path '{mgf_file_path}'.")
+    except Exception as e:
+        print(f"Error reading MGF file: {e}")
+
+    # Traverse trees and collect spectra identifiers from nodes with spectrum not None
+    spectra_in_trees = set()
+    all_identifiers_in_trees = []
+    duplicate_identifiers = set()
+    identifier_counts = defaultdict(int)
+
+    for tree in trees:
+        queue = deque([tree.root])
+        while queue:
+            node = queue.popleft()
+            if node.spectrum is not None:
+                identifier = node.spectrum.get('identifier')
+                if identifier:
+                    all_identifiers_in_trees.append(identifier)
+                    identifier_counts[identifier] += 1
+                    if identifier_counts[identifier] > 1:
+                        duplicate_identifiers.add(identifier)
+            for child in node.children.values():
+                queue.append(child)
+
+    # Populate the set of spectra in trees
+    spectra_in_trees = set(all_identifiers_in_trees)
+    total_spectra_in_trees = len(all_identifiers_in_trees)
+    unique_spectra_in_trees = len(spectra_in_trees)
+
+    # Check for missing and extra spectra
+    missing_spectra = spectra_in_mgf - spectra_in_trees
+    extra_spectra = spectra_in_trees - spectra_in_mgf
+
+    # Check if all spectra in trees are unique
+    all_unique_in_trees = len(all_identifiers_in_trees) == unique_spectra_in_trees
+
     # ---------------------------- Reporting --------------------------- #
     # Molecule-Level Reporting
     print(f"--- Molecule-Level Statistics ---")
@@ -581,14 +687,52 @@ def analyze_trees(trees, top_n: int = 10):
     print(f"\n--- Tree-Level Statistics ---")
     print(f"Total number of trees: {len(trees)}")
     print(f"Number of trees containing nodes with spectrum=None: {trees_with_missing}")
-    print(f"Total number of nodes with spectrum=None: {total_missing_nodes}")
+    print(f"Total number of nodes missing spectra across all trees: {total_missing_nodes}")
     print(f"\nTop {top_n} trees with the most missing spectra:")
     for idx, (tree, count) in enumerate(top_missing_trees, 1):
         total_nodes = tree.get_total_nodes_count()
-        print(f"{idx}. Tree with root SMILES '{tree.root.spectrum.get('smiles')}': {count} missing spectra out of {total_nodes} nodes.")
+        print(f"{idx}. Tree with root SMILES '{tree.root.spectra.get['smiles']}': {count} missing spectra out of {total_nodes} nodes.")
 
+    # Spectra-Level Reporting
+    print(f"\n--- Spectra-Level Statistics ---")
+    print(f"Total number of spectra in MGF with SPECTYPE='{spectype}': {total_spectra_in_mgf}")
+    print(f"Total number of spectra present in trees (nodes with spectrum not None): {total_spectra_in_trees}")
+    print(f"Number of unique spectra in trees: {unique_spectra_in_trees}")
+
+    if missing_spectra:
+        print(f"Number of spectra in MGF not present in trees: {len(missing_spectra)}")
+    else:
+        print("No spectra from MGF are missing in trees.")
+
+    if extra_spectra:
+        print(f"Number of spectra in trees not present in MGF: {len(extra_spectra)}")
+    else:
+        print("No extra spectra found in trees that are not in MGF.")
+
+    if not all_unique_in_trees:
+        print("Warning: There are duplicate spectra in trees based on 'IDENTIFIER'.")
+        print(f"Number of duplicate 'IDENTIFIER's: {len(duplicate_identifiers)}")
+        print("Duplicate 'IDENTIFIER's:")
+        for identifier in duplicate_identifiers:
+            print(f"  {identifier}")
+    else:
+        print("All spectra in trees are unique based on 'IDENTIFIER'.")
+
+    # Deviation Statistics Reporting
+    if deviations is not None:
+        max_dev_dict = find_max_deviation(deviations)
+        if max_dev_dict is not None:
+            print(f"\n--- Deviation Statistics ---")
+            print(f"Maximum deviation found: {max_dev_dict.get('deviation')}")
+            print(f"Desired Value: {max_dev_dict.get('desired_value')}")
+            print(f"Actual Value: {max_dev_dict.get('actual_value')}")
+    else:
+        print("\nNo deviations provided. Skipping maximum deviation analysis.")
+
+    # Additional Reporting
     print(f"\nNumber of trees skipped due to missing SMILES: {skipped_trees}")
 
+    # ---------------------------- Return ------------------------------ #
     return {
         'molecule_level': {
             'total_unique_molecules': total_unique_molecules,
@@ -602,6 +746,18 @@ def analyze_trees(trees, top_n: int = 10):
             'trees_with_missing_spectra': trees_with_missing,
             'total_missing_nodes': total_missing_nodes,
             'top_n_trees_missing_spectra': top_missing_trees
+        },
+        'spectra_level': {
+            'total_spectra_in_mgf': total_spectra_in_mgf,
+            'total_spectra_in_trees': total_spectra_in_trees,
+            'unique_spectra_in_trees': unique_spectra_in_trees,
+            'missing_spectra_in_trees': len(missing_spectra),
+            'extra_spectra_in_trees': len(extra_spectra),
+            'all_spectra_unique_in_trees': all_unique_in_trees,
+            'duplicate_identifiers': list(duplicate_identifiers) if not all_unique_in_trees else []
+        },
+        'deviation_statistics': {
+            'max_deviation': max_dev_dict if deviations is not None else None
         },
         'additional': {
             'skipped_trees_due_to_missing_smiles': skipped_trees
