@@ -1,5 +1,9 @@
 from collections import defaultdict, deque
 import typing as T
+import numpy as np
+import pandas as pd
+from collections import defaultdict, Counter
+from massspecgym.data.datasets import MSnDataset
 import heapq
 from matchms.importing import load_from_mgf
 
@@ -286,3 +290,110 @@ def analyze_trees( trees, mgf_file_path, spectype = 'ALL_ENERGIES', deviations =
             'skipped_trees_due_to_missing_smiles': skipped_trees
         }
     }
+
+
+def compute_fold_statistics(msn_dataset: MSnDataset, smiles_to_fold: T.Dict[str, str]) -> T.Dict[str, T.Any]:
+    """
+    Compute and print statistics per fold for the given MSnDataset and smiles_to_fold mapping.
+    Returns the statistics as a dictionary.
+
+    Parameters:
+    - msn_dataset: An instance of MSnDataset.
+    - smiles_to_fold: A dictionary mapping SMILES strings to fold names ('train', 'val', 'test').
+
+    Returns:
+    - fold_stats: A dictionary containing statistics per fold.
+    """
+
+    fold_trees = defaultdict(list)
+    unmatched_trees = []
+
+    for tree in msn_dataset.trees:
+        smiles = tree.root.spectrum.get('smiles')
+        fold = smiles_to_fold.get(smiles)
+        if fold:
+            fold_trees[fold].append(tree)
+        else:
+            unmatched_trees.append(tree)
+
+    total_trees = len(msn_dataset.trees)
+    matched_trees = total_trees - len(unmatched_trees)
+    if matched_trees != total_trees:
+        print(f"Warning: {len(unmatched_trees)} out of {total_trees} trees were not matched to any fold.")
+    else:
+        print("All trees have been matched to folds.")
+
+    fold_stats = {}
+
+    # For each fold, compute statistics
+    for fold, trees in fold_trees.items():
+        depths = []
+        branching_factors = []
+        precursor_mzs = []
+        retention_times = []
+        total_nodes_counts = []
+        adducts = []
+
+        for tree in trees:
+            # Depth and branching factor
+            depth = tree.get_depth()
+            depths.append(depth)
+
+            branching_factor = tree.get_branching_factor()
+            branching_factors.append(branching_factor)
+
+            # Precursor m/z and retention time
+            precursor_mz = tree.root.spectrum.get('precursor_mz')
+            if precursor_mz is not None:
+                precursor_mzs.append(float(precursor_mz))
+
+            retention_time = tree.root.spectrum.get('retention_time')
+            if retention_time is not None:
+                retention_times.append(float(retention_time))
+
+            # Total nodes count
+            total_nodes = tree.get_total_nodes_count()
+            total_nodes_counts.append(total_nodes)
+
+            # Adduct
+            adduct = tree.root.spectrum.get('adduct')
+            if adduct:
+                adducts.append(adduct)
+
+        avg_depth = np.mean(depths) if depths else 0
+        avg_branching_factor = np.mean(branching_factors) if branching_factors else 0
+        avg_precursor_mz = np.mean(precursor_mzs) if precursor_mzs else 0
+        avg_retention_time = np.mean(retention_times) if retention_times else 0
+        avg_total_nodes = np.mean(total_nodes_counts) if total_nodes_counts else 0
+
+        adduct_counts = Counter(adducts)
+        total_adducts = sum(adduct_counts.values())
+        adduct_relative_abundance = {adduct: count / total_adducts for adduct, count in adduct_counts.items()}
+
+        sorted_adducts = adduct_counts.most_common()
+
+        print(f"Statistics for fold '{fold}':")
+        print(f"  Number of trees: {len(trees)}")
+        print(f"  Average depth: {avg_depth:.2f}")
+        print(f"  Average branching factor: {avg_branching_factor:.2f}")
+        print(f"  Average precursor m/z: {avg_precursor_mz:.2f}")
+        print(f"  Average retention time: {avg_retention_time:.2f}")
+        print(f"  Average total nodes per tree: {avg_total_nodes:.2f}")
+        print("  Relative abundances of adducts:")
+        for adduct, count in sorted_adducts:
+            rel_abundance = adduct_relative_abundance[adduct]
+            print(f"    {adduct}: {rel_abundance * 100:.2f}% ({count} occurrences)")
+        print()
+
+        fold_stats[fold] = {
+            'num_trees': len(trees),
+            'avg_depth': avg_depth,
+            'avg_branching_factor': avg_branching_factor,
+            'avg_precursor_mz': avg_precursor_mz,
+            'avg_retention_time': avg_retention_time,
+            'avg_total_nodes': avg_total_nodes,
+            'adduct_relative_abundance': adduct_relative_abundance,
+            'adduct_counts': adduct_counts
+        }
+
+    return fold_stats
