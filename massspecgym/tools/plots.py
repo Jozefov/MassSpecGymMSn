@@ -1,7 +1,12 @@
 import networkx as nx
+import matplotlib.pyplot as plt
 from matplotlib.patches import Patch
 from collections import defaultdict, deque
-import matplotlib.pyplot as plt
+
+from rdkit import Chem
+from rdkit.Chem import DataStructs, AllChem
+import seaborn as sns
+
 
 
 def assign_positions(G, root):
@@ -153,3 +158,54 @@ def visualize_tree(tree, save_path=None, figsize=(50, 40), dpi=300):
         plt.show()
 
     plt.close()
+
+
+def evaluate_split(df_split, train_fold='train', val_fold='val', smiles_col='smiles', radius=2, n_bits=2048):
+    """
+    Evaluates data split by computing the maximum Tanimoto similarity between validation and training sets.
+
+    Parameters:
+        df_split (pd.DataFrame): DataFrame containing the data split with a 'fold' column indicating 'train', 'val', or 'test'.
+        train_fold (str): Label for the training fold. Default is 'train'.
+        val_fold (str): Label for the validation fold. Default is 'val'.
+        smiles_col (str): Column name for SMILES strings. Default is 'smiles'.
+        radius (int): Radius parameter for Morgan fingerprints. Default is 2.
+        n_bits (int): Number of bits for Morgan fingerprints. Default is 2048.
+
+    Returns:
+        list: List of maximum Tanimoto similarities for validation set molecules.
+    """
+
+    train_smiles = df_split[df_split['fold'] == train_fold][smiles_col].unique()
+    val_smiles = df_split[df_split['fold'] == val_fold][smiles_col].unique()
+
+    train_mols = [Chem.MolFromSmiles(smi) for smi in train_smiles]
+    train_mols = [mol for mol in train_mols if mol is not None]
+    val_mols = [Chem.MolFromSmiles(smi) for smi in val_smiles]
+    val_mols = [mol for mol in val_mols if mol is not None]
+
+    print("Computing Morgan fingerprints for training set...")
+    train_fps = [AllChem.GetMorganFingerprintAsBitVect(mol, radius, nBits=n_bits) for mol in train_mols]
+
+    print("Computing Morgan fingerprints for validation set...")
+    val_fps = [AllChem.GetMorganFingerprintAsBitVect(mol, radius, nBits=n_bits) for mol in val_mols]
+
+    print("Computing maximum Tanimoto similarities for validation set...")
+    max_tanimotos = []
+    for val_fp in val_fps:
+        if len(train_fps) == 0:
+            max_tanimotos.append(0.0)
+            continue
+        similarities = DataStructs.BulkTanimotoSimilarity(val_fp, train_fps)
+        max_sim = max(similarities) if similarities else 0.0
+        max_tanimotos.append(max_sim)
+
+    print("Plotting histogram of maximum Tanimoto similarities...")
+    plt.figure(figsize=(6, 4))
+    sns.histplot(max_tanimotos, bins=100, kde=False)
+    plt.xlabel('Max Tanimoto similarity to training set')
+    plt.ylabel('Number of validation set molecules')
+    plt.title(f'Max Tanimoto Similarity for {train_fold} and {val_fold}')
+    plt.show()
+
+    return max_tanimotos
