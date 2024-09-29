@@ -1,6 +1,52 @@
 import random
-from massspecgym.tools.murcko_hist import are_sub_hists
+import tqdm
+import pandas as pd
+from rdkit import Chem
 
+from massspecgym.tools.murcko_hist import are_sub_hists, murcko_hist
+
+def compute_murcko_histograms(df):
+    """
+    Compute Murcko histograms for each unique SMILES in the DataFrame.
+
+    Parameters:
+    - df: pandas DataFrame with at least a 'smiles' column.
+
+    Returns:
+    - df_us: DataFrame of unique SMILES with their Murcko histograms.
+    """
+    if 'smiles' not in df.columns:
+        raise ValueError("SMILES column is missing in DataFrame.")
+
+    df_us = df.drop_duplicates(subset=['smiles']).copy()
+
+    print("Computing Murcko histograms...")
+    tqdm.pandas()
+    df_us['MurckoHist'] = df_us['smiles'].progress_apply(
+        lambda x: murcko_hist(Chem.MolFromSmiles(x))
+    )
+    df_us['MurckoHistStr'] = df_us['MurckoHist'].astype(str)
+    return df_us
+
+def group_by_murcko_histograms(df_us):
+    """
+    Group molecules by their Murcko histograms.
+
+    Parameters:
+    - df_us: DataFrame of unique SMILES with their Murcko histograms.
+
+    Returns:
+    - df_gb: DataFrame grouped by MurckoHistStr.
+    """
+    df_gb = df_us.groupby('MurckoHistStr').agg(
+        count=('smiles', 'count'),
+        smiles_list=('smiles', list)
+    ).reset_index()
+
+    df_gb['MurckoHist'] = df_gb['MurckoHistStr'].apply(eval)
+
+    df_gb = df_gb.sort_values('count', ascending=False).reset_index(drop=True)
+    return df_gb
 
 def split_by_murcko_histograms(df_us, df_gb, val_fraction=0.10, test_fraction=0.10, k=3, d=4, seed=None):
     """
