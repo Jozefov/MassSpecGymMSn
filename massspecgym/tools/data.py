@@ -1,5 +1,5 @@
 import random
-import tqdm
+from tqdm.notebook import tqdm
 import pandas as pd
 from rdkit import Chem
 
