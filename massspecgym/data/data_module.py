@@ -8,7 +8,7 @@ from typing import Optional
 from torch.utils.data.dataset import Subset
 #from torch.utils.data.dataloader import DataLoader # <--- replaced with pytorch_geometric equivalent
 from torch_geometric.loader import DataLoader
-from massspecgym.data.datasets import MassSpecDataset
+from massspecgym.data.datasets import MassSpecDataset, MSnDataset
 
 
 class MassSpecDataModule(pl.LightningDataModule):
@@ -46,6 +46,7 @@ class MassSpecDataModule(pl.LightningDataModule):
             if set(self.split.columns) != {"identifier", "fold"}:
                 raise ValueError('Split file must contain "id" and "fold" columns.')
             self.split["identifier"] = self.split["identifier"].astype(str)
+
             if set(self.dataset.metadata["identifier"]) != set(self.split["identifier"]):
                 raise ValueError(
                     "Dataset item IDs must match the IDs in the split file."
@@ -57,15 +58,50 @@ class MassSpecDataModule(pl.LightningDataModule):
                 '"Folds" column must contain only "train", "val", or "test" values.'
             )
 
+    # def setup(self, stage=None):
+    #     split_mask = self.split.loc[self.dataset.metadata["identifier"]].values
+    #     if stage == "fit" or stage is None:
+    #         self.train_dataset = Subset(
+    #             self.dataset, np.where(split_mask == "train")[0]
+    #         )
+    #         self.val_dataset = Subset(self.dataset, np.where(split_mask == "val")[0])
+    #     if stage == "test":
+    #         self.test_dataset = Subset(self.dataset, np.where(split_mask == "test")[0])
+
     def setup(self, stage=None):
-        split_mask = self.split.loc[self.dataset.metadata["identifier"]].values
-        if stage == "fit" or stage is None:
-            self.train_dataset = Subset(
-                self.dataset, np.where(split_mask == "train")[0]
-            )
-            self.val_dataset = Subset(self.dataset, np.where(split_mask == "val")[0])
-        if stage == "test":
-            self.test_dataset = Subset(self.dataset, np.where(split_mask == "test")[0])
+
+        if isinstance(self.dataset, MSnDataset):
+
+            root_identifier_to_index = self.dataset.identifier_to_index
+
+            split_df = self.split.reset_index()
+            identifiers = split_df['identifier'].values
+            folds = split_df['fold'].values
+
+            fold_indices = {'train': [], 'val': [], 'test': []}
+
+            for identifier, fold in zip(identifiers, folds):
+                index = root_identifier_to_index.get(identifier)
+                if index is not None:
+                    fold_indices[fold].append(index)
+                else:
+                    print(f"Warning: Identifier {identifier} not found in dataset.")
+
+            if stage == "fit" or stage is None:
+                self.train_dataset = Subset(self.dataset, fold_indices['train'])
+                self.val_dataset = Subset(self.dataset, fold_indices['val'])
+            if stage == "test":
+                self.test_dataset = Subset(self.dataset, fold_indices['test'])
+        else:
+
+            split_mask = self.split.loc[self.dataset.metadata["identifier"]].values
+            if stage == "fit" or stage is None:
+                self.train_dataset = Subset(
+                    self.dataset, np.where(split_mask == "train")[0]
+                )
+                self.val_dataset = Subset(self.dataset, np.where(split_mask == "val")[0])
+            if stage == "test":
+                self.test_dataset = Subset(self.dataset, np.where(split_mask == "test")[0])
 
     def train_dataloader(self):
         return DataLoader(

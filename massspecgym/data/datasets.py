@@ -11,7 +11,7 @@ from pathlib import Path
 from typing import Optional, List, Tuple
 from torch.utils.data.dataset import Dataset
 from torch.utils.data.dataloader import default_collate
-from torch_geometric.data import Data
+from torch_geometric.data import Data, Batch
 from matchms.importing import load_from_mgf
 from massspecgym.featurize import SpectrumFeaturizer
 from massspecgym.data.transforms import SpecTransform, MolTransform, MolToInChIKey
@@ -448,6 +448,7 @@ class MSnDataset(MassSpecDataset):
         # load dataset using the parent class
         super().__init__(pth=pth)
         self.max_allowed_deviation = max_allowed_deviation
+        self.dtype = dtype
         self.metadata = self.metadata[self.metadata["spectype"] == "ALL_ENERGIES"]
 
         # TODO: add identifiers (and split?) to the mgf file
@@ -464,14 +465,18 @@ class MSnDataset(MassSpecDataset):
 
         # Generate trees from paths and their corresponding SMILES
         self.trees, self.pyg_trees, self.smiles = self._generate_trees(self.all_tree_paths)
-
         # TODO PYG trees
+
+        # split trees to folds
+        self.identifier_to_index = {}
+        for idx, tree in enumerate(self.trees):
+            root_identifier = tree.root.spectrum.get('identifier')
+            self.identifier_to_index[root_identifier] = idx
 
         self.tree_depths = self._get_tree_depths(self.trees)
         self.branching_factors = self._get_branching_factors(self.trees)
 
     def __len__(self):
-        # TODO
         return len(self.pyg_trees)
 
     def __getitem__(self, idx: int, transform_mol:bool = True) -> dict:
@@ -484,6 +489,20 @@ class MSnDataset(MassSpecDataset):
         
         item  = {"spec_tree": spec_tree, "mol": mol}
         return item
+
+    @staticmethod
+    def collate_fn(batch: T.Iterable[dict]) -> dict:
+        """
+        Custom collate function to handle batches of spec_tree and mol.
+        """
+
+        spec_trees = [item['spec_tree'] for item in batch]
+        mols = [item['mol'] for item in batch]
+
+        batch_spec_trees = Batch.from_data_list(spec_trees)
+        mols = torch.stack(mols) if isinstance(mols[0], torch.Tensor) else mols
+
+        return {'spec_tree': batch_spec_trees, 'mol': mols}
 
 
     def _parse_paths_from_df(self, df) -> List[Tuple[str, float, List[Tuple[List[float], matchms.Spectrum]], matchms.Spectrum]]:
