@@ -416,16 +416,24 @@ class Tree:
         node_to_index = {node: idx for idx, node in enumerate(nodes)}
 
         # Build edge_index tensor
-        edge_index = torch.tensor(
-            [[node_to_index[edge[0]], node_to_index[edge[1]]] for edge in edges],
-            dtype=torch.long
-        ).t().contiguous()
+        if edges:
+            edge_index = torch.tensor(
+                [[node_to_index[edge[0]], node_to_index[edge[1]]] for edge in edges],
+                dtype=torch.long
+            ).t().contiguous()
+        else:
+            # If no edges
+            edge_index = torch.empty((2, 0), dtype=torch.long)
 
         # Build node features
         node_features = []
         for node in nodes:
             feature_tensor = featurizer.featurize(node)
             node_features.append(feature_tensor)
+
+        feature_shapes = [f.shape for f in node_features]
+        if len(set(feature_shapes)) != 1:
+            raise ValueError(f"Inconsistent node feature shapes: {feature_shapes}")
 
         # Determine if features are NumPy arrays or PyTorch tensors
         first_feature = node_features[0]
@@ -443,10 +451,10 @@ class Tree:
 class MSnDataset(MassSpecDataset):
     def __init__(self, pth=None, dtype=torch.float32, mol_transform=None, featurizer=None,
                  max_allowed_deviation: float = 0.005):
-        self.mol_transform = mol_transform
-
         # load dataset using the parent class
         super().__init__(pth=pth)
+
+        self.mol_transform = mol_transform
         self.max_allowed_deviation = max_allowed_deviation
         self.dtype = dtype
         self.metadata = self.metadata[self.metadata["spectype"] == "ALL_ENERGIES"]
@@ -468,10 +476,16 @@ class MSnDataset(MassSpecDataset):
         # TODO PYG trees
 
         # split trees to folds
-        self.identifier_to_index = {}
+        self.root_identifier_to_index = {}
         for idx, tree in enumerate(self.trees):
             root_identifier = tree.root.spectrum.get('identifier')
-            self.identifier_to_index[root_identifier] = idx
+            self.root_identifier_to_index[root_identifier] = idx
+
+        # Precompute molecular features
+        self.mol_features = []
+        for smi in self.smiles:
+            mol_feature = self._compute_mol_feature(smi)
+            self.mol_features.append(mol_feature)
 
         self.tree_depths = self._get_tree_depths(self.trees)
         self.branching_factors = self._get_branching_factors(self.trees)
@@ -479,15 +493,11 @@ class MSnDataset(MassSpecDataset):
     def __len__(self):
         return len(self.pyg_trees)
 
-    def __getitem__(self, idx: int, transform_mol:bool = True) -> dict:
+    def __getitem__(self, idx: int) -> dict:
         spec_tree = self.pyg_trees[idx]
-        smi = self.smiles[idx]
+        mol_feature = self.mol_features[idx]
 
-        mol = self.mol_transform(smi) if transform_mol and self.mol_transform else smi
-        if isinstance(mol, np.ndarray):
-            mol = torch.as_tensor(mol, dtype=self.dtype)
-        
-        item  = {"spec_tree": spec_tree, "mol": mol}
+        item = {"spec_tree": spec_tree, "mol": mol_feature}
         return item
 
     @staticmethod
@@ -565,7 +575,7 @@ class MSnDataset(MassSpecDataset):
         smiles = []
         pyg_trees = []
 
-        for smi, root_precursor_mz, paths, root_spectrum in dataset_all_tree_paths:
+        for _, root_precursor_mz, paths, root_spectrum in dataset_all_tree_paths:
             tree = Tree(root_precursor_mz, spectrum=root_spectrum,
                         max_allowed_deviation=self.max_allowed_deviation)
 
@@ -575,6 +585,7 @@ class MSnDataset(MassSpecDataset):
             pyg_tree = tree.to_pyg_data(self.featurizer)
             pyg_trees.append(pyg_tree)
             trees.append(tree)
+            smi = tree.root.spectrum.get('smiles')
             smiles.append(smi)
 
         return trees, pyg_trees, smiles
@@ -585,3 +596,20 @@ class MSnDataset(MassSpecDataset):
     
     def _get_branching_factors(self, trees):
         return [tree.get_branching_factor() for tree in trees]
+
+    def _compute_mol_feature(self, smi):
+        if self.mol_transform:
+            mol_feature = self.mol_transform(smi)
+
+            if isinstance(mol_feature, np.ndarray):
+                mol_feature = torch.as_tensor(mol_feature, dtype=self.dtype)
+            elif isinstance(mol_feature, str):
+                # If the output is a string, we can keep it as is
+                pass
+            else:
+                # Handle other data types if necessary
+                pass
+            return mol_feature
+        else:
+            # If no mol_transform is provided, return the SMILES string
+            return smi
