@@ -39,7 +39,12 @@ class MassSpecDataModule(pl.LightningDataModule):
 
     def prepare_data(self):
         if self.split_pth is None:
-            self.split = self.dataset.metadata[["identifier", "fold"]]
+            if isinstance(self.dataset, MSnDataset):
+                # Filter metadata to only include root identifiers
+                self.split = self.dataset.metadata[self.dataset.metadata["identifier"].str.endswith("_0000000")][
+                    ["identifier", "fold"]]
+            else:
+                self.split = self.dataset.metadata[["identifier", "fold"]]
         else:
             # NOTE: custom split is not tested
             self.split = pd.read_csv(self.split_pth, sep="\t")
@@ -47,7 +52,15 @@ class MassSpecDataModule(pl.LightningDataModule):
                 raise ValueError('Split file must contain "id" and "fold" columns.')
             self.split["identifier"] = self.split["identifier"].astype(str)
 
-            if set(self.dataset.metadata["identifier"]) != set(self.split["identifier"]):
+            if isinstance(self.dataset, MSnDataset):
+                # Use root identifiers from the dataset
+                dataset_identifiers = set(self.dataset.root_identifier_to_index.keys())
+            else:
+                dataset_identifiers = set(self.dataset.metadata["identifier"])
+
+            split_identifiers = set(self.split["identifier"])
+
+            if dataset_identifiers != split_identifiers:
                 raise ValueError(
                     "Dataset item IDs must match the IDs in the split file."
                 )
@@ -58,29 +71,14 @@ class MassSpecDataModule(pl.LightningDataModule):
                 '"Folds" column must contain only "train", "val", or "test" values.'
             )
 
-    # def setup(self, stage=None):
-    #     split_mask = self.split.loc[self.dataset.metadata["identifier"]].values
-    #     if stage == "fit" or stage is None:
-    #         self.train_dataset = Subset(
-    #             self.dataset, np.where(split_mask == "train")[0]
-    #         )
-    #         self.val_dataset = Subset(self.dataset, np.where(split_mask == "val")[0])
-    #     if stage == "test":
-    #         self.test_dataset = Subset(self.dataset, np.where(split_mask == "test")[0])
-
     def setup(self, stage=None):
 
         if isinstance(self.dataset, MSnDataset):
-
-            root_identifier_to_index = self.dataset.identifier_to_index
-
-            split_df = self.split.reset_index()
-            identifiers = split_df['identifier'].values
-            folds = split_df['fold'].values
+            root_identifier_to_index = self.dataset.root_identifier_to_index
 
             fold_indices = {'train': [], 'val': [], 'test': []}
 
-            for identifier, fold in zip(identifiers, folds):
+            for identifier, fold in self.split.items():
                 index = root_identifier_to_index.get(identifier)
                 if index is not None:
                     fold_indices[fold].append(index)
@@ -96,9 +94,7 @@ class MassSpecDataModule(pl.LightningDataModule):
 
             split_mask = self.split.loc[self.dataset.metadata["identifier"]].values
             if stage == "fit" or stage is None:
-                self.train_dataset = Subset(
-                    self.dataset, np.where(split_mask == "train")[0]
-                )
+                self.train_dataset = Subset(self.dataset, np.where(split_mask == "train")[0])
                 self.val_dataset = Subset(self.dataset, np.where(split_mask == "val")[0])
             if stage == "test":
                 self.test_dataset = Subset(self.dataset, np.where(split_mask == "test")[0])
