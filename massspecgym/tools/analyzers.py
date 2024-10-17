@@ -127,7 +127,9 @@ def analyze_trees( trees, mgf_file_path, spectype = 'ALL_ENERGIES', deviations =
         queue = deque([tree.root])
         missing_count = 0
         root_inchi = tree.root.spectrum.get('inchi') if tree.root.spectrum else None
+        root_identifier = tree.root.spectrum.get('identifier') if tree.root.spectrum else None
         inchi_mismatch = False
+        mismatched_nodes = []
 
         while queue:
             node = queue.popleft()
@@ -137,7 +139,11 @@ def analyze_trees( trees, mgf_file_path, spectype = 'ALL_ENERGIES', deviations =
                 node_inchi = node.spectrum.get('inchi')
                 if node_inchi != root_inchi:
                     inchi_mismatch = True
-
+                    mismatched_nodes.append({
+                        'node': node,
+                        'inchi': node_inchi,
+                        'identifier': node.spectrum.get('identifier') if node.spectrum else 'Unknown'
+                    })
             for child in node.children.values():
                 queue.append(child)
 
@@ -150,22 +156,10 @@ def analyze_trees( trees, mgf_file_path, spectype = 'ALL_ENERGIES', deviations =
             trees_with_inchi_mismatch += 1
             trees_inchi_mismatch_details.append({
                 'tree': tree,
+                'root_identifier': root_identifier,
                 'root_inchi': root_inchi,
-                'mismatched_nodes': []
+                'mismatched_nodes': mismatched_nodes
             })
-            # Collect details of nodes with mismatched INCHI
-            queue = deque([tree.root])
-            while queue:
-                node = queue.popleft()
-                if node.spectrum is not None:
-                    node_inchi = node.spectrum.get('inchi')
-                    if node_inchi != root_inchi:
-                        trees_inchi_mismatch_details[-1]['mismatched_nodes'].append({
-                            'node': node,
-                            'inchi': node_inchi
-                        })
-                for child in node.children.values():
-                    queue.append(child)
 
     # Identify top_n trees with the most missing nodes
     top_missing_trees = sorted(tree_missing_counts, key=lambda x: x[1], reverse=True)[:top_n]
@@ -254,9 +248,9 @@ def analyze_trees( trees, mgf_file_path, spectype = 'ALL_ENERGIES', deviations =
     if trees_with_inchi_mismatch > 0:
         print(f"\nTrees with INCHI mismatch between root and nodes:")
         for idx, mismatch_info in enumerate(trees_inchi_mismatch_details, 1):
-            root_smiles = mismatch_info['tree'].root.spectrum.get('smiles')
+            root_identifier = mismatch_info['tree'].root.spectrum.get('identifier')
             root_inchi = mismatch_info['root_inchi']
-            print(f"{idx}. Tree with root SMILES '{root_smiles}' and INCHI '{root_inchi}':")
+            print(f"{idx}. Tree with root IDENTIFIER '{root_identifier}' and INCHI '{root_inchi}':")
             for node_info in mismatch_info['mismatched_nodes']:
                 node = node_info['node']
                 node_inchi = node_info['inchi']
