@@ -256,6 +256,8 @@ def analyze_trees( trees, mgf_file_path, spectype = 'ALL_ENERGIES', deviations =
                 node_inchi = node_info['inchi']
                 node_identifier = node.spectrum.get('identifier') if node.spectrum else 'Unknown'
                 print(f"   - Node with identifier '{node_identifier}' has INCHI '{node_inchi}'")
+    else:
+        print(f"\nFound 0 Trees with inchi-mismatch between root and nodes:")
 
     # Spectra-Level Reporting
     print(f"\n--- Spectra-Level Statistics ---")
