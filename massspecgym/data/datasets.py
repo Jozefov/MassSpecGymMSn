@@ -228,7 +228,16 @@ class TreeNode:
         else:
             raise ValueError(f"Child with value {child_value} not found in children of node with value {self.value}")
 
-    def add_child(self, child_value, spectrum=None) -> 'TreeNode':
+    def add_child(self, child_value, spectrum=None) -> Optional['TreeNode']:
+
+        if spectrum is not None and self.spectrum is not None:
+            parent_inchi = self.spectrum.get('inchi')
+            child_inchi = spectrum.get('inchi')
+            if parent_inchi != child_inchi:
+                print(f"InChI mismatch between parent ({self.spectrum.get('identifier')}) "
+                      f"and child ({spectrum.get('identifier')}): {parent_inchi} != {child_inchi}")
+                return None
+
         # If child spectrum is None assign spectrum, if it is not None check is same or not add save as conflict
         if child_value in self.children:
             child_node = self.children[child_value]
@@ -309,21 +318,22 @@ class Tree:
             if i == len(path) - 1:
                 # Last node in the path, associate the spectrum
                 # Check if the node exists
-                if node_value in current_node.children:
-                    child_node = current_node.children[node_value]
-                    if child_node.spectrum is None:
-                        # Assign the spectrum to the existing node
-                        child_node.spectrum = spectrum
-                    else:
-                        # Node already has a spectrum; handle conflict if necessary
-                        if child_node.spectrum != spectrum:
-                            # Record the conflict (optional)
-                            print(f"spectrum conflict at {child_node.spectrum.get('identifier')} and"
-                                  f" {spectrum.get('identifier')} identifiers")
-                            # Keep the existing spectrum
-                else:
-                    # Create a new child node with the spectrum
-                    child_node = current_node.add_child(node_value, spectrum)
+                # if node_value in current_node.children:
+                #     child_node = current_node.children[node_value]
+                #     current_node.add_child(node_value, spectrum=spectrum)
+                #     # if child_node.spectrum is None:
+                #     #     # Assign the spectrum to the existing node
+                #     #     child_node.spectrum = spectrum
+                #     # else:
+                #     #     # Node already has a spectrum; handle conflict if necessary
+                #     #     if child_node.spectrum != spectrum:
+                #     #         # Record the conflict (optional)
+                #     #         print(f"spectrum conflict at {child_node.spectrum.get('identifier')} and"
+                #     #               f" {spectrum.get('identifier')} identifiers")
+                #     #         # Keep the existing spectrum
+                # else:
+                #     # Create a new child node with the spectrum
+                child_node = current_node.add_child(node_value, spectrum)
                 current_node = child_node
             else:
                 # Intermediate nodes
@@ -534,6 +544,8 @@ class MSnDataset(MassSpecDataset):
                 continue
             else:
                 cur_path_group = all_tree_paths[idx_cur_precursors_mz][2]
+                root_spectrum = all_tree_paths[idx_cur_precursors_mz][3]
+
                 msn_precursor_mzs_str = row["msn_precursor_mzs"]
 
                 if pd.isna(msn_precursor_mzs_str) or msn_precursor_mzs_str == 'None':
@@ -554,6 +566,13 @@ class MSnDataset(MassSpecDataset):
                 # Get the spectrum for this row
                 identifier = row['identifier']
                 spectrum = self.identifier_to_spectrum[identifier]
+
+                # Get InChI of root spectrum and current spectrum
+                root_inchi = root_spectrum.get('inchi') if root_spectrum else None
+                spectrum_inchi = spectrum.get('inchi') if spectrum else None
+
+                if root_inchi != spectrum_inchi:
+                    continue
 
                 # Append the path and spectrum as a tuple
                 cur_path_group.append((msn_precursor_mzs, spectrum))
