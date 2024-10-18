@@ -292,6 +292,21 @@ class TreeNode:
             edges.extend(child.get_edges())
         return edges
 
+    def prune_missing_spectra(self):
+        """
+        Recursively prune child nodes that have spectrum == None.
+        If a child node has spectrum == None, remove it and its entire subtree.
+        """
+        children_to_remove = []
+        for child_value, child_node in self.children.items():
+            if child_node.spectrum is None:
+                children_to_remove.append(child_value)
+            else:
+                child_node.prune_missing_spectra()
+        # Remove the marked children
+        for child_value in children_to_remove:
+            del self.children[child_value]
+
 
 class Tree:
     def __init__(self, root: float, spectrum=None, max_allowed_deviation: float = 0.005):
@@ -381,6 +396,12 @@ class Tree:
         edges = [(u, v) for u, v in edges if u != self.root.value or v != self.root.value]
         return edges
 
+    def prune_missing_spectra(self):
+        """
+        Prune the tree by removing branches starting from nodes with spectrum == None.
+        Do not prune root if is None
+        """
+        self.root.prune_missing_spectra()
 
     def to_pyg_data(self, featurizer: Optional[SpectrumFeaturizer] = None):
 
@@ -460,7 +481,7 @@ class Tree:
 
 class MSnDataset(MassSpecDataset):
     def __init__(self, pth=None, dtype=torch.float32, mol_transform=None, featurizer=None,
-                 max_allowed_deviation: float = 0.005):
+                 max_allowed_deviation: float = 0.005, prune_missing_spectra=False):
         # load dataset using the parent class
         super().__init__(pth=pth)
 
@@ -482,7 +503,8 @@ class MSnDataset(MassSpecDataset):
         self.all_tree_paths = self._parse_paths_from_df(self.metadata)
 
         # Generate trees from paths and their corresponding SMILES
-        self.trees, self.pyg_trees, self.smiles = self._generate_trees(self.all_tree_paths)
+        self.trees, self.pyg_trees, self.smiles = self._generate_trees(self.all_tree_paths,
+                                                                       prune_missing_spectra=prune_missing_spectra)
         # TODO PYG trees
 
         # split trees to folds
@@ -588,7 +610,8 @@ class MSnDataset(MassSpecDataset):
             all_deviations.extend(tree.deviations)
         return all_deviations
 
-    def _generate_trees(self, dataset_all_tree_paths: List[Tuple[str, float, List[Tuple[List[float], matchms.Spectrum]], matchms.Spectrum]]) \
+    def _generate_trees(self, dataset_all_tree_paths: List[Tuple[str, float, List[Tuple[List[float], matchms.Spectrum]], matchms.Spectrum]],
+                        prune_missing_spectra: bool = False) \
             -> Tuple[List['Tree'], List['Data'], List[str]]:
         trees = []
         smiles = []
@@ -600,6 +623,9 @@ class MSnDataset(MassSpecDataset):
 
             for path, spectrum in paths:
                 tree.add_path_with_spectrum(path, spectrum)
+
+            if prune_missing_spectra:
+                tree.prune_missing_spectra()
 
             pyg_tree = tree.to_pyg_data(self.featurizer)
             pyg_trees.append(pyg_tree)
