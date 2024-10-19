@@ -403,7 +403,7 @@ class Tree:
         """
         self.root.prune_missing_spectra()
 
-    def to_pyg_data(self, featurizer: Optional[SpectrumFeaturizer] = None, hierarchical: bool = False):
+    def to_pyg_data(self, featurizer: Optional[SpectrumFeaturizer] = None, hierarchical_tree: bool = True):
 
         if featurizer is None:
             edges = self.get_edges()
@@ -446,7 +446,7 @@ class Tree:
         # Assign indices to nodes
         node_to_index = {node: idx for idx, node in enumerate(nodes)}
 
-        if not hierarchical:
+        if not hierarchical_tree:
             reverse_edges = [(child, parent) for parent, child in edges]
             edges.extend(reverse_edges)
 
@@ -485,7 +485,7 @@ class Tree:
 
 class MSnDataset(MassSpecDataset):
     def __init__(self, pth=None, dtype=torch.float32, mol_transform=None, featurizer=None,
-                 max_allowed_deviation: float = 0.005, prune_missing_spectra=True):
+                 max_allowed_deviation: float = 0.005, prune_missing_spectra=True, hierarchical_tree=True):
         # load dataset using the parent class
         super().__init__(pth=pth)
 
@@ -508,7 +508,8 @@ class MSnDataset(MassSpecDataset):
 
         # Generate trees from paths and their corresponding SMILES
         self.trees, self.pyg_trees, self.smiles = self._generate_trees(self.all_tree_paths,
-                                                                       prune_missing_spectra=prune_missing_spectra)
+                                                                       prune_missing_spectra=prune_missing_spectra,
+                                                                       hierarchical_tree=hierarchical_tree)
         # TODO PYG trees
 
         # split trees to folds
@@ -615,7 +616,7 @@ class MSnDataset(MassSpecDataset):
         return all_deviations
 
     def _generate_trees(self, dataset_all_tree_paths: List[Tuple[str, float, List[Tuple[List[float], matchms.Spectrum]], matchms.Spectrum]],
-                        prune_missing_spectra: bool = False) \
+                        prune_missing_spectra: bool = False, hierarchical_tree: bool = True) \
             -> Tuple[List['Tree'], List['Data'], List[str]]:
         trees = []
         smiles = []
@@ -631,7 +632,7 @@ class MSnDataset(MassSpecDataset):
             if prune_missing_spectra:
                 tree.prune_missing_spectra()
 
-            pyg_tree = tree.to_pyg_data(self.featurizer)
+            pyg_tree = tree.to_pyg_data(self.featurizer, hierarchical_tree)
             pyg_trees.append(pyg_tree)
             trees.append(tree)
             smi = tree.root.spectrum.get('smiles')
