@@ -7,6 +7,7 @@ import torch.nn as nn
 import re
 from typing import List, Dict, Optional, Callable
 from massspecgym.featurize.constants import *
+from massspecgym.tools.io import load_embeddings
 
 class SpectrumFeaturizer:
     def __init__(self, config: Dict, mode: str = 'numpy'):
@@ -53,6 +54,9 @@ class SpectrumFeaturizer:
         # Map feature names to methods
         self.feature_methods = FEATURE_METHODS
 
+        # Initialize features that require preprocessing
+        self.preprocess_features()
+
     def featurize(self, node):
         """
         Featurize a TreeNode into a feature vector based on the configuration.
@@ -77,9 +81,47 @@ class SpectrumFeaturizer:
             feature_tensor = torch.cat(feature_tensors)
             return feature_tensor  # Returns a PyTorch tensor
 
+
+    def preprocess_features(self):
+        """
+        Initialize features that require preprocessing based on the configuration.
+        """
+        for feature, init_method in FEATURES_REQUIRING_PREPROCESSING.items():
+            if feature in self.config.get('features', []):
+                method = getattr(self, init_method, None)
+                if method:
+                    method()
+                else:
+                    raise NotImplementedError(f"Initialization method '{init_method}' not implemented for feature '{feature}'.")
+
+    def _init_embeddings(self):
+        """
+        Initialize the embeddings by loading them from the specified file.
+        """
+        embedding_config = self.config.get('feature_attributes', {}).get('spectrum_embedding', {})
+        path_to_embeddings = embedding_config.get('path_to_embeddings')
+        if not path_to_embeddings:
+            raise ValueError("Path to embeddings file must be specified in 'feature_attributes' under 'spectrum_embedding'.")
+
+        identifier_col = embedding_config.get('identifier_col', 'identifiers')
+        embedding_col = embedding_config.get('embedding_col', 'embeddings')
+
+        self.embeddings = load_embeddings(
+            file_path=path_to_embeddings,
+            identifier_col=identifier_col,
+            embedding_col=embedding_col
+        )
+
+        # Verify embedding dimensions
+        embedding_dim = embedding_config.get('embedding_dim', None)
+        if embedding_dim:
+            for id_, emb in self.embeddings.items():
+                if emb.shape[0] != embedding_dim:
+                    raise ValueError(f"Embedding dimension mismatch for identifier '{id_}'. Expected {embedding_dim}, got {emb.shape[0]}.")
+
     def _featurize_value(self, node):
         """
-        Featurize the 'value' attribute of the node.
+        Featurize the 'value', precursor_mz attribute of the node.
 
         Supports 'continuous' or 'binning' encoding, with optional normalization.
         """
@@ -325,16 +367,48 @@ class SpectrumFeaturizer:
         return binned_intensities
 
     def _featurize_spectrum_embedding(self, node):
-        # TODO
+        """
+        Featurize the 'spectrum_embedding' feature for a node.
+        Retrieves the embedding from the pre-loaded embeddings dict based on the node's spectrum identifier.
+        Returns a NumPy array or PyTorch tensor based on the mode.
+        """
         spectrum = node.spectrum
         if spectrum is None:
             # Return zero vector if spectrum is missing
-            embedding_dim = self.config.get('feature_attributes', {}).get('spectrum_embedding', {}).get('embedding_dim', 128)
-            return [0.0] * embedding_dim
+            embedding_dim = self.config.get('feature_attributes', {}).get('spectrum_embedding', {}).get('embedding_dim', 1024)
+            if self.mode == 'numpy':
+                return np.zeros(embedding_dim, dtype=np.float32)
+            else:
+                return torch.zeros(embedding_dim, dtype=torch.float32)
+
+        identifier = spectrum.get('identifier', None)
+        embedding = self.embeddings.get(identifier, None)
+
+        # if embedding is None:
+        #     # Handle missing embedding
+        #     embedding_dim = self.config.get('feature_attributes', {}).get('spectrum_embedding', {}).get('embedding_dim', 1024)
+        #     if self.mode == 'numpy':
+        #         return np.zeros(embedding_dim, dtype=np.float32)
+        #     else:
+        #         return torch.zeros(embedding_dim, dtype=torch.float32)
+
+        # Ensure embedding is a numpy array
+        if not isinstance(embedding, np.ndarray):
+            embedding = np.array(embedding)
+
+        # Handle embedding dimensions
+        expected_dim = self.config.get('feature_attributes', {}).get('spectrum_embedding', {}).get('embedding_dim', 1024)
+        if embedding.shape[0] != expected_dim:
+            print(f"Warning: Embedding dimension mismatch for identifier '{identifier}'. Expected {expected_dim}, got {embedding.shape[0]}. Using zero vector.")
+            if self.mode == 'numpy':
+                return np.zeros(expected_dim, dtype=np.float32)
+            else:
+                return torch.zeros(expected_dim, dtype=torch.float32)
+
+        if self.mode == 'numpy':
+            return embedding.astype(np.float32)
         else:
-            # Use the embedding model to get the spectrum representation
-            embedding = self._get_spectrum_embedding(spectrum)
-            return embedding.tolist()
+            return torch.from_numpy(embedding).float()
 
     def _get_spectrum_embedding(self, spectrum):
         # TODO
