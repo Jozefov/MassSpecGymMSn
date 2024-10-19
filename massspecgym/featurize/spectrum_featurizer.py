@@ -384,14 +384,6 @@ class SpectrumFeaturizer:
         identifier = spectrum.get('identifier', None)
         embedding = self.embeddings.get(identifier, None)
 
-        # if embedding is None:
-        #     # Handle missing embedding
-        #     embedding_dim = self.config.get('feature_attributes', {}).get('spectrum_embedding', {}).get('embedding_dim', 1024)
-        #     if self.mode == 'numpy':
-        #         return np.zeros(embedding_dim, dtype=np.float32)
-        #     else:
-        #         return torch.zeros(embedding_dim, dtype=torch.float32)
-
         # Ensure embedding is a numpy array
         if not isinstance(embedding, np.ndarray):
             embedding = np.array(embedding)
