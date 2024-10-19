@@ -481,7 +481,7 @@ class Tree:
 
 class MSnDataset(MassSpecDataset):
     def __init__(self, pth=None, dtype=torch.float32, mol_transform=None, featurizer=None,
-                 max_allowed_deviation: float = 0.005, prune_missing_spectra=False):
+                 max_allowed_deviation: float = 0.005, prune_missing_spectra=True):
         # load dataset using the parent class
         super().__init__(pth=pth)
 
