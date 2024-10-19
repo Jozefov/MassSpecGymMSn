@@ -384,7 +384,6 @@ class SpectrumFeaturizer:
         identifier = spectrum.get('identifier', None)
         embedding = self.embeddings.get(identifier, None)
 
-        # Ensure embedding is a numpy array
         if not isinstance(embedding, np.ndarray):
             embedding = np.array(embedding)
 

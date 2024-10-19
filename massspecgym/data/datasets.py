@@ -403,7 +403,7 @@ class Tree:
         """
         self.root.prune_missing_spectra()
 
-    def to_pyg_data(self, featurizer: Optional[SpectrumFeaturizer] = None):
+    def to_pyg_data(self, featurizer: Optional[SpectrumFeaturizer] = None, hierarchical: bool = False):
 
         if featurizer is None:
             edges = self.get_edges()
@@ -445,6 +445,10 @@ class Tree:
 
         # Assign indices to nodes
         node_to_index = {node: idx for idx, node in enumerate(nodes)}
+
+        if not hierarchical:
+            reverse_edges = [(child, parent) for parent, child in edges]
+            edges.extend(reverse_edges)
 
         # Build edge_index tensor
         if edges:
