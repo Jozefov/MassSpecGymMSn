@@ -13,7 +13,7 @@ with open(os.path.join(here, "massspecgym", "__init__.py")) as f:
 setup(
     name="massspecgym",
     packages=find_packages(),
-    version="0.0.1",  # TODO: Update version automatically
+    version=version['__version__'],
     description="MassSpecGym: Benchmark For the Discovery of New Molecules From Mass Spectra",
     author="MassSpecGym developers",
     license="MIT",
