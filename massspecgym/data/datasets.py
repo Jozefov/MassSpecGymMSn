@@ -575,7 +575,7 @@ class MSnDataset(MassSpecDataset):
         spec_tree = self.pyg_trees[idx]
         mol_feature = self.mol_features[idx]
 
-        item = {"spec_tree": spec_tree, "mol": mol_feature}
+        item = {"spec": spec_tree, "mol": mol_feature}
         return item
 
     @staticmethod
@@ -584,13 +584,13 @@ class MSnDataset(MassSpecDataset):
         Custom collate function to handle batches of spec_tree and mol.
         """
 
-        spec_trees = [item['spec_tree'] for item in batch]
+        spec_trees = [item['spec'] for item in batch]
         mols = [item['mol'] for item in batch]
 
         batch_spec_trees = Batch.from_data_list(spec_trees)
         mols = torch.stack(mols) if isinstance(mols[0], torch.Tensor) else mols
 
-        return {'spec_tree': batch_spec_trees, 'mol': mols}
+        return {'spec': batch_spec_trees, 'mol': mols}
 
 
     def _parse_paths_from_df(self, df) -> List[Tuple[str, float, List[Tuple[List[float], matchms.Spectrum]], matchms.Spectrum]]:
