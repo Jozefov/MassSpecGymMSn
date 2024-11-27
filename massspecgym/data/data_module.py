@@ -22,6 +22,7 @@ class MassSpecDataModule(pl.LightningDataModule):
         dataset: MassSpecDataset,
         batch_size: int,
         num_workers: int = 0,
+        persistent_workers: bool = True,
         split_pth: Optional[Path] = None,
         **kwargs
     ):
@@ -36,6 +37,7 @@ class MassSpecDataModule(pl.LightningDataModule):
         self.split_pth = split_pth
         self.batch_size = batch_size
         self.num_workers = num_workers
+        self.persistent_workers = persistent_workers if num_workers > 0 else False
 
     def prepare_data(self):
         if self.split_pth is None:
@@ -105,6 +107,7 @@ class MassSpecDataModule(pl.LightningDataModule):
             batch_size=self.batch_size,
             shuffle=True,
             num_workers=self.num_workers,
+            persistent_workers=self.persistent_workers,
             drop_last=False,
             collate_fn=self.dataset.collate_fn,
         )
@@ -115,6 +118,7 @@ class MassSpecDataModule(pl.LightningDataModule):
             batch_size=self.batch_size,
             shuffle=False,
             num_workers=self.num_workers,
+            persistent_workers=self.persistent_workers,
             drop_last=False,
             collate_fn=self.dataset.collate_fn,
         )
@@ -125,6 +129,7 @@ class MassSpecDataModule(pl.LightningDataModule):
             batch_size=self.batch_size,
             shuffle=False,
             num_workers=self.num_workers,
+            persistent_workers=self.persistent_workers,
             drop_last=False,
             collate_fn=self.dataset.collate_fn,
         )

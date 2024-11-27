@@ -8,6 +8,7 @@ from collections import deque
 import matchms
 import massspecgym.utils as utils
 from pathlib import Path
+from rdkit import Chem
 from typing import Optional, List, Tuple
 from torch.utils.data.dataset import Dataset
 from torch.utils.data.dataloader import default_collate
@@ -26,16 +27,16 @@ class MassSpecDataset(Dataset):
 
     def __init__(
         self,
-        spec_transform: Optional[SpecTransform] = None,
-        mol_transform: Optional[MolTransform] = None,
-        pth: Optional[Path] = None,
+        spec_transform: T.Optional[T.Union[SpecTransform, T.Dict[str, SpecTransform]]] = None,
+        mol_transform: T.Optional[T.Union[MolTransform, T.Dict[str, MolTransform]]] = None,
+        pth: T.Optional[Path] = None,
         return_mol_freq: bool = True,
         return_identifier: bool = True,
         dtype: T.Type = torch.float32
     ):
         """
         Args:
-            mgf_pth (Optional[Path], optional): Path to the .tsv or .mgf file containing the mass spectra.
+            pth (Optional[Path], optional): Path to the .tsv or .mgf file containing the mass spectra.
                 Default is None, in which case the MassSpecGym dataset is downloaded from HuggingFace Hub.
         """
         self.pth = pth
@@ -83,22 +84,41 @@ class MassSpecDataset(Dataset):
         self, i: int, transform_spec: bool = True, transform_mol: bool = True
     ) -> dict:
         spec = self.spectra[i]
-        spec = (
-            self.spec_transform(spec)
-            if transform_spec and self.spec_transform
-            else spec
-        )
-        spec = torch.as_tensor(spec, dtype=self.dtype)
+        # spec = (
+        #     self.spec_transform(spec)
+        #     if transform_spec and self.spec_transform
+        #     else spec
+        # )
+        # spec = torch.as_tensor(spec, dtype=self.dtype)
 
         metadata = self.metadata.iloc[i]
         mol = metadata["smiles"]
-        mol = self.mol_transform(mol) if transform_mol and self.mol_transform else mol
-        if isinstance(mol, np.ndarray):
-            mol = torch.as_tensor(mol, dtype=self.dtype)
+        # mol = self.mol_transform(mol) if transform_mol and self.mol_transform else mol
+        # if isinstance(mol, np.ndarray):
+        #     mol = torch.as_tensor(mol, dtype=self.dtype)
 
-        item = {"spec": spec, "mol": mol}
+        # Apply all transformations to the spectrum
+        item = {}
+        if transform_spec and self.spec_transform:
+            if isinstance(self.spec_transform, dict):
+                for key, transform in self.spec_transform.items():
+                    item[key] = transform(spec) if transform is not None else spec
+            else:
+                item["spec"] = self.spec_transform(spec)
+        else:
+            item["spec"] = spec
 
-        # TODO: Add other metadata to the item. Should it be just done in subclasses?
+        # Apply all transformations to the molecule
+        if transform_mol and self.mol_transform:
+            if isinstance(self.mol_transform, dict):
+                for key, transform in self.mol_transform.items():
+                    item[key] = transform(mol) if transform is not None else mol
+            else:
+                item["mol"] = self.mol_transform(mol)
+        else:
+            item["mol"] = mol
+
+        # Add other metadata to the item
         item.update({
             k: metadata[k] for k in ["precursor_mz", "adduct"]
         })
@@ -108,6 +128,11 @@ class MassSpecDataset(Dataset):
 
         if self.return_identifier:
             item["identifier"] = metadata["identifier"]
+
+        # TODO: this should be refactored
+        for k, v in item.items():
+            if not isinstance(v, str):
+                item[k] = torch.as_tensor(v, dtype=self.dtype)
 
         return item
 
@@ -131,18 +156,34 @@ class RetrievalDataset(MassSpecDataset):
         candidates_pth: T.Optional[T.Union[Path, str]] = None,
         **kwargs,
     ):
+        """
+        Args:
+            mol_label_transform (MolTransform, optional): Transformation to apply to the candidate molecules.
+                Defaults to `MolToInChIKey()`.
+            candidates_pth (Optional[Union[Path, str]], optional): Path to the .json file containing the candidates for
+                retrieval. Defaults to None, in which case the candidates for standard `molecular retrieval` challenge
+                are downloaded from HuggingFace Hub. If set to `bonus`, the candidates based on molecular formulas
+                for the `bonus chemical formulae challenge` are downloaded instead.
+        """
         super().__init__(**kwargs)
 
         self.candidates_pth = candidates_pth
         self.mol_label_transform = mol_label_transform
 
-        # Download candidates from HuggigFace Hub
+        # Download candidates from HuggigFace Hub if not a path to exisiting file is passed
         if self.candidates_pth is None:
             self.candidates_pth = utils.hugging_face_download(
                 "molecules/MassSpecGym_retrieval_candidates_mass.json"
             )
+        elif self.candidates_pth == 'bonus':
+            self.candidates_pth = utils.hugging_face_download(
+                "molecules/MassSpecGym_retrieval_candidates_formula.json"
+            )
         elif isinstance(self.candidates_pth, str):
-            self.candidates_pth = utils.hugging_face_download(candidates_pth)
+            if Path(self.candidates_pth).is_file():
+                self.candidates_pth = Path(self.candidates_pth)
+            else:
+                self.candidates_pth = utils.hugging_face_download(candidates_pth)
 
         # Read candidates_pth from json to dict: SMILES -> respective candidate SMILES
         with open(self.candidates_pth, "r") as file:
