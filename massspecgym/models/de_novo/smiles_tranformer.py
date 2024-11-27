@@ -2,10 +2,12 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 import typing as T
-from rdkit import Chem
-from tokenizers import Tokenizer
+from torch_geometric.nn import MLP
+from massspecgym.models.tokenizers import SpecialTokensBaseTokenizer
+from massspecgym.data.transforms import MolToFormulaVector
 from massspecgym.models.base import Stage
 from massspecgym.models.de_novo.base import DeNovoMassSpecGymModel
+from massspecgym.definitions import PAD_TOKEN, SOS_TOKEN, EOS_TOKEN
 
 
 class SmilesTransformer(DeNovoMassSpecGymModel):
@@ -16,15 +18,16 @@ class SmilesTransformer(DeNovoMassSpecGymModel):
         nhead: int,
         num_encoder_layers: int,
         num_decoder_layers: int,
-        smiles_tokenizer: Tokenizer,
-        start_token: str = "<s>",
-        end_token: str = "</s>",
-        pad_token: str = "<pad>",
+        smiles_tokenizer: SpecialTokensBaseTokenizer,
+        start_token: str = SOS_TOKEN,
+        end_token: str = EOS_TOKEN,
+        pad_token: str = PAD_TOKEN,
         dropout: float = 0.1,
-        max_smiles_len: int = 100,
+        max_smiles_len: int = 200,
         k_predictions: int = 1,
         temperature: T.Optional[float] = 1.0,
-        pre_norm=False,
+        pre_norm: bool = False,
+        chemical_formula: bool = False,
         *args,
         **kwargs
     ):
@@ -57,26 +60,21 @@ class SmilesTransformer(DeNovoMassSpecGymModel):
         )
         self.tgt_decoder = nn.Linear(d_model, self.vocab_size)
 
+        self.chemical_formula = chemical_formula
+        if self.chemical_formula:
+            self.formula_mlp = MLP(
+                in_channels=MolToFormulaVector.num_elements(),
+                hidden_channels=MolToFormulaVector.num_elements(),
+                out_channels=d_model,
+                num_layers=1,
+                dropout=dropout,
+                norm=None
+            )
+
         self.criterion = nn.CrossEntropyLoss()
 
-    def forward(
-        self,
-        src,
-        tgt,
-        tgt_mask=None,
-        src_key_padding_mask=None,
-        tgt_key_padding_mask=None,
-    ):
-        src = self.src_encoder(src) * (self.d_model**0.5)  # (seq_len, batch_size, d_model)
-        tgt = self.tgt_embedding(tgt) * (self.d_model**0.5)  # (seq_len, batch_size, d_model)
-
-        memory = self.transformer.encoder(src, src_key_padding_mask=src_key_padding_mask)
-        output = self.transformer.decoder(tgt, memory, tgt_mask=tgt_mask, tgt_key_padding_mask=tgt_key_padding_mask)
-
-        output = self.tgt_decoder(output)  # (seq_len, batch_size, vocab_size)
-        return output
-
-    def step(self, batch: dict, stage: Stage = Stage.NONE) -> dict:
+    def forward(self, batch):
+        
         spec = batch["spec"]  # (batch_size, seq_len, in_dim)
         smiles = batch["mol"]  # List of SMILES of length batch_size
 
@@ -92,29 +90,49 @@ class SmilesTransformer(DeNovoMassSpecGymModel):
         tgt_seq_len = smiles.size(1)
         tgt_mask = self.transformer.generate_square_subsequent_mask(tgt_seq_len).to(smiles.device)
 
-        spec = spec.permute(1, 0, 2)  # (seq_len, batch_size, in_dim)
+        # Preapre inputs for transformer teacher forcing
+        src = spec.permute(1, 0, 2)  # (seq_len, batch_size, in_dim)
         smiles = smiles.permute(1, 0)  # (seq_len, batch_size)
+        tgt = smiles[:-1, :]
+        tgt_mask = tgt_mask[:-1, :-1]
+        src_key_padding_mask = src_key_padding_mask
+        tgt_key_padding_mask = tgt_key_padding_mask[:, :-1]
 
-        smiles_pred = self(
-            src=spec,
-            tgt=smiles[:-1, :],  # :-1 here and 1: below for teacher forcing
-            tgt_mask=tgt_mask[:-1, :-1],
-            src_key_padding_mask=src_key_padding_mask,
-            tgt_key_padding_mask=tgt_key_padding_mask[:, :-1],
-        )
+        # Input and output embeddings
+        src = self.src_encoder(src)  # (seq_len, batch_size, d_model)
+        if self.chemical_formula:
+            formula_emb = self.formula_mlp(batch["formula"])  # (batch_size, d_model)
+            src = src + formula_emb.unsqueeze(0)  # (seq_len, batch_size, d_model) + (1, batch_size, d_model)
+        src = src * (self.d_model**0.5)
+        tgt = self.tgt_embedding(tgt) * (self.d_model**0.5)  # (seq_len, batch_size, d_model)
 
-        loss = self.criterion(smiles_pred.view(-1, self.vocab_size), smiles[1:, :].contiguous().view(-1))
-        return dict(loss=loss, mols_pred=None)
+        # Transformer forward pass
+        memory = self.transformer.encoder(src, src_key_padding_mask=src_key_padding_mask)
+        output = self.transformer.decoder(tgt, memory, tgt_mask=tgt_mask, tgt_key_padding_mask=tgt_key_padding_mask)
 
-    def validation_step(self, batch: dict, batch_idx: torch.Tensor) -> tuple:
-        outputs = self.step(batch)
-        decoded_smiles = self.decode_smiles(batch["spec"])
-        return dict(loss=outputs["loss"], mols_pred=decoded_smiles)
-    
-    def test_step(self, batch: dict, batch_idx: torch.Tensor) -> tuple:
-        outputs = self.step(batch)
-        decoded_smiles = self.decode_smiles(batch["spec"])
-        return dict(loss=outputs["loss"], mols_pred=decoded_smiles)
+        # Logits to vocabulary
+        output = self.tgt_decoder(output)  # (seq_len, batch_size, vocab_size)
+
+        # Reshape before returning
+        smiles_pred = output.view(-1, self.vocab_size)
+        smiles = smiles[1:, :].contiguous().view(-1)
+        return smiles_pred, smiles
+
+    def step(self, batch: dict, stage: Stage = Stage.NONE) -> dict:
+
+        # Forward pass
+        smiles_pred, smiles = self.forward(batch)
+
+        # Compute loss
+        loss = self.criterion(smiles_pred, smiles)
+
+        # Generate SMILES strings
+        if stage in self.log_only_loss_at_stages:
+            mols_pred = None
+        else:
+            mols_pred = self.decode_smiles(batch)
+
+        return dict(loss=loss, mols_pred=mols_pred)
 
     def generate_src_padding_mask(self, spec):
         return spec.sum(-1) == 0
@@ -122,22 +140,17 @@ class SmilesTransformer(DeNovoMassSpecGymModel):
     def generate_tgt_padding_mask(self, smiles):
         return smiles == self.pad_token_id
 
-    def decode_smiles(self, spec):
+    def decode_smiles(self, batch):
 
         decoded_smiles_str = []
         for _ in range(self.k_predictions):
             decoded_smiles = self.greedy_decode(
-                spec,  # (batch_size, seq_len, in_dim) 
+                batch,
                 max_len=self.max_smiles_len,
                 temperature=self.temperature,
             )
 
             decoded_smiles = [seq.tolist() for seq in decoded_smiles]
-            decoded_smiles = [
-                (seq[:seq.index(self.end_token_id) + 1] if self.end_token_id in seq else seq)
-                for seq
-                in decoded_smiles
-            ]
             decoded_smiles_str.append(self.smiles_tokenizer.decode_batch(decoded_smiles))
 
         # Transpose from (k, batch_size) to (batch_size, k)
@@ -145,15 +158,20 @@ class SmilesTransformer(DeNovoMassSpecGymModel):
 
         return decoded_smiles_str
 
-    def greedy_decode(self, spec, max_len, temperature):
+    def greedy_decode(self, batch, max_len, temperature):
 
         with torch.inference_mode():
 
+            spec = batch["spec"]    # (batch_size, seq_len, in_dim) 
             src_key_padding_mask = self.generate_src_padding_mask(spec)   
 
             spec = spec.permute(1, 0, 2)  # (seq_len, batch_size, in_dim)
-            src = self.src_encoder(spec) * (self.d_model**0.5)
-            memory = self.transformer.encoder(src, src_key_padding_mask=src_key_padding_mask,)
+            src = self.src_encoder(spec)  # (seq_len, batch_size, d_model)
+            if self.chemical_formula:
+                formula_emb = self.formula_mlp(batch["formula"])  # (batch_size, d_model)
+                src = src + formula_emb.unsqueeze(0)  # (seq_len, batch_size, d_model) + (1, batch_size, d_model)
+            src = src * (self.d_model**0.5)
+            memory = self.transformer.encoder(src, src_key_padding_mask=src_key_padding_mask)
 
             batch_size = src.size(1)
             out_tokens = torch.ones(1, batch_size).fill_(self.start_token_id).type(torch.long).to(spec.device)
