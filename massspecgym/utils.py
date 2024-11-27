@@ -10,8 +10,13 @@ import pandas as pd
 import typing as T
 import pulp
 import os
-
 from sklearn.model_selection import GroupKFold
+import torch
+import torch.nn as nn
+import torch.nn.functional as F
+from itertools import groupby
+
+
 from torch_geometric.utils import to_networkx
 from itertools import combinations
 from pathlib import Path
@@ -21,21 +26,75 @@ from rdkit.Chem import DataStructs, Draw
 from rdkit.Chem.Descriptors import ExactMolWt
 from rdkit.Chem.Scaffolds import MurckoScaffold
 from huggingface_hub import hf_hub_download
-from tokenizers import ByteLevelBPETokenizer
-from tokenizers.processors import TemplateProcessing
-from standardizeUtils.standardizeUtils import (
-    standardize_structure_with_pubchem,
-    standardize_structure_list_with_pubchem,
-)
+
+from torchmetrics.wrappers import BootStrapper
+from torchmetrics.metric import Metric
 
 
+def load_massspecgym(fold: T.Optional[str] = None) -> pd.DataFrame:
+    """
+    Load the MassSpecGym dataset.
 
-def load_massspecgym():
+    Args:
+        fold (str, optional): Fold name to load. If None, the entire dataset is loaded.
+    """
     df = pd.read_csv(hugging_face_download("MassSpecGym.tsv"), sep="\t")
     df = df.set_index("identifier")
     df['mzs'] = df['mzs'].apply(parse_spec_array)
     df['intensities'] = df['intensities'].apply(parse_spec_array)
+    if fold is not None:
+        df = df[df['fold'] == fold]
     return df
+
+
+def load_unlabeled_mols(col_name: str = "smiles") -> pd.Series:
+    """
+    Load a list of unlabeled molecules.
+
+    Args:
+        col_name (str, optional): Name of the column to return. Should be one of ["smiles", "selfies"].
+    """
+    return pd.read_csv(
+        hugging_face_download(
+            "molecules/MassSpecGym_molecules_MCES2_disjoint_with_test_fold_4M.tsv"
+        ),
+        sep="\t"
+    )[col_name]
+
+
+def load_massspecgym_mols(fold: T.Optional[str] = None, unique: bool = True) -> pd.Series:
+    """
+    Load a list of molecules from the MassSpecGym dataset.
+
+    Args:
+        fold (str, optional): Fold name to load. If None, the entire dataset is loaded.
+        unique (bool, optional): Whether to return only unique molecules.
+    """
+    df = load_massspecgym(fold)
+    mols = df["smiles"]
+    if unique:
+        mols = pd.Series(mols.unique())
+    return mols
+
+
+def load_train_mols(unique: bool = True) -> pd.Series:
+    """
+    Load a list of training molecules.
+
+    Args:
+        unique (bool, optional): Whether to return only unique molecules.
+    """
+    return load_massspecgym_mols("train", unique=unique)
+
+
+def load_val_mols(unique: bool = True) -> pd.Series:
+    """
+    Load a list of validation molecules.
+
+    Args:
+        unique (bool, optional): Whether to return only unique molecules.
+    """
+    return load_massspecgym_mols("val", unique=unique)
 
 
 def pad_spectrum(
@@ -82,7 +141,18 @@ def morgan_fp(mol: Chem.Mol, fp_size=2048, radius=2, to_np=True):
     return fp
 
 
-def tanimoto_morgan_similarity(mol1: Chem.Mol, mol2: Chem.Mol) -> float:
+def tanimoto_morgan_similarity(mol1: T.Union[Chem.Mol, str], mol2: T.Union[Chem.Mol, str]) -> float:
+    """
+    Compute Tanimoto similarity between two molecules using Morgan fingerprints.
+
+    Args:
+        mol1 (T.Union[Chem.Mol, str]): First molecule as RDKit molecule or SMILES string.
+        mol2 (T.Union[Chem.Mol, str]): Second molecule as RDKit molecule or SMILES string.
+    """
+    if isinstance(mol1, str):
+        mol1 = Chem.MolFromSmiles(mol1)
+    if isinstance(mol2, str):
+        mol2 = Chem.MolFromSmiles(mol2)
     return DataStructs.TanimotoSimilarity(morgan_fp(mol1, to_np=False), morgan_fp(mol2, to_np=False))
 
 
@@ -90,6 +160,18 @@ def standardize_smiles(smiles: T.Union[str, T.List[str]]) -> T.Union[str, T.List
     """
     Standardize SMILES representation of a molecule using PubChem standardization.
     """
+    try:
+        from standardizeUtils.standardizeUtils import (
+            standardize_structure_with_pubchem,
+            standardize_structure_list_with_pubchem,
+        )
+    except ImportError:
+        raise ImportError(
+            "The standardizeUtils package is required for SMILES standardization. "
+            "Please install it using: pip install "
+            "git+https://github.com/boecker-lab/standardizeUtils@b415f1c51b49f6c5cd0e9c6ab89224c8ad657a35#egg=standardizeUtils"
+        )
+
     if isinstance(smiles, str):
         return standardize_structure_with_pubchem(smiles, 'smiles')
     elif isinstance(smiles, list):
@@ -149,37 +231,19 @@ def init_plotting(figsize=(6, 2), font_scale=1.0, style="whitegrid"):
     sns.set_palette(["#009473", "#D94F70", "#5A5B9F", "#F0C05A", "#7BC4C4", "#FF6F61"])
 
 
-def get_smiles_bpe_tokenizer() -> ByteLevelBPETokenizer:
-    """
-    Return a Byte-level BPE tokenizer trained on the SMILES strings from the
-    `MassSpecGym_test_fold_MCES2_disjoint_molecules_4M.tsv` dataset.
-    TODO: refactor to a well-organized class.
-    """
-    # Initialize the tokenizer
-    special_tokens = ["<pad>", "<s>", "</s>", "<unk>"]
-    smiles_tokenizer = ByteLevelBPETokenizer()
-    smiles = pd.read_csv(hugging_face_download(
-        "molecules/MassSpecGym_test_fold_MCES2_disjoint_molecules_4M.tsv"
-    ), sep="\t")["smiles"]
-    smiles_tokenizer.train_from_iterator(smiles, special_tokens=special_tokens)
-
-    # Enable padding
-    smiles_tokenizer.enable_padding(direction='right', pad_token="<pad>")
-
-    # Add template processing to include start and end of sequence tokens
-    smiles_tokenizer.post_processor = TemplateProcessing(
-        single="<s> $A </s>",
-        pair="<s> $A </s> <s> $B </s>",
-        special_tokens=[
-            ("<s>", smiles_tokenizer.token_to_id("<s>")),
-            ("</s>", smiles_tokenizer.token_to_id("</s>")),
-        ],
-    )
-    return smiles_tokenizer
-
-
 def parse_spec_array(arr: str) -> np.ndarray:
     return np.array(list(map(float, arr.split(","))))
+
+
+def spec_array_to_str(arr: np.ndarray) -> str:
+    return ",".join(map(str, arr))
+
+
+def compute_mass(smiles: str) -> float:
+    mol = Chem.MolFromSmiles(smiles)
+    if mol is None:
+        raise ValueError("Invalid SMILES string.")
+    return ExactMolWt(mol)
 
 
 def plot_spectrum(spec, hue=None, xlim=None, ylim=None, mirror_spec=None, highl_idx=None,
@@ -365,6 +429,136 @@ class MyopicMCES():
         dist = retval[1]
         return dist
 
+
+class ReturnScalarBootStrapper(BootStrapper):
+    def __init__(
+        self,
+        base_metric: Metric,
+        num_bootstraps: int = 10,
+        mean: bool = False,
+        std: bool = False,
+        quantile: T.Optional[T.Union[float, torch.Tensor]] = None,
+        raw: bool = False,
+        sampling_strategy: str = "poisson",
+        **kwargs: T.Any
+    ) -> None:
+        """Wrapper for BootStrapper that returns a scalar value in compute instead of a dictionary."""
+
+        if mean + std + bool(quantile) + raw != 1:
+            raise ValueError("Exactly one of mean, std, quantile or raw should be True.")
+
+        if std:
+            self.compute_key = "std"
+        else:
+            raise NotImplementedError("Currently only std is implemented.")
+
+        super().__init__(
+            base_metric=base_metric,
+            num_bootstraps=num_bootstraps,
+            mean=mean,
+            std=std,
+            quantile=quantile,
+            raw=raw,
+            sampling_strategy=sampling_strategy,
+            **kwargs
+        )
+
+    def compute(self):
+        return super().compute()[self.compute_key]
+
+
+def batch_ptr_to_batch_idx(batch_ptr: torch.Tensor) -> torch.Tensor:
+    """
+    Convert a tensor of batch pointers to a tensor of batch indexes.
+
+    For example [1, 3, 2] -> [0, 1, 1, 1, 2, 2]
+
+    Args:
+        batch_ptr (Tensor): Tensor of batch pointers.
+    """
+    indexes = torch.arange(batch_ptr.size(0), device=batch_ptr.device)
+    indexes = torch.repeat_interleave(indexes, batch_ptr)
+    return indexes
+
+
+def unbatch_list(batch_list: list, batch_idx: torch.Tensor) -> list:
+    """
+    Unbatch a list of items using the batch indexes (i.e., number of samples per batch).
+
+    Args:
+        batch_list (list): List of items to unbatch.
+        batch_idx (Tensor): Tensor of batch indexes.
+    """
+    return [
+        [batch_list[j] for j in range(len(batch_list)) if batch_idx[j] == i]
+        for i in range(batch_idx[-1] + 1)
+    ]
+
+
+class CosSimLoss(nn.Module):
+    def __init__(self):
+        super(CosSimLoss, self).__init__()
+
+    def forward(self, inputs, targets):
+        return 1 - F.cosine_similarity(inputs, targets).mean()
+
+
+def parse_sirius_ms(spectra_file: str) -> T.Tuple[dict, T.List[T.Tuple[str, np.ndarray]]]:
+    """
+    Parses spectra from the SIRIUS .ms file.
+
+    Copied from the code of Goldman et al.:
+    https://github.com/samgoldman97/mist/blob/4c23d34fc82425ad5474a53e10b4622dcdbca479/src/mist/utils/parse_utils.py#LL10C77-L10C77.
+    :return T.Tuple[dict, T.List[T.Tuple[str, np.ndarray]]]: metadata and list of spectra tuples containing name and array
+    """
+    lines = [i.strip() for i in open(spectra_file, "r").readlines()]
+
+    group_num = 0
+    metadata = {}
+    spectras = []
+    my_iterator = groupby(
+        lines, lambda line: line.startswith(">") or line.startswith("#")
+    )
+
+    for index, (start_line, lines) in enumerate(my_iterator):
+        group_lines = list(lines)
+        subject_lines = list(next(my_iterator)[1])
+        # Get spectra
+        if group_num > 0:
+            spectra_header = group_lines[0].split(">")[1]
+            peak_data = [
+                [float(x) for x in peak.split()[:2]]
+                for peak in subject_lines
+                if peak.strip()
+            ]
+            # Check if spectra is empty
+            if len(peak_data):
+                peak_data = np.vstack(peak_data)
+                # Add new tuple
+                spectras.append((spectra_header, peak_data))
+        # Get meta data
+        else:
+            entries = {}
+            for i in group_lines:
+                if " " not in i:
+                    continue
+                elif i.startswith("#INSTRUMENT TYPE"):
+                    key = "#INSTRUMENT TYPE"
+                    val = i.split(key)[1].strip()
+                    entries[key[1:]] = val
+                else:
+                    start, end = i.split(" ", 1)
+                    start = start[1:]
+                    while start in entries:
+                        start = f"{start}'"
+                    entries[start] = end
+
+            metadata.update(entries)
+        group_num += 1
+
+    metadata["_FILE_PATH"] = spectra_file
+    metadata["_FILE"] = Path(spectra_file).stem
+    return metadata, spectras
 
 # def visualize_MSn_tree(tree, figsize=(12, 8)):
 #     def add_path_to_graph(graph, path):
