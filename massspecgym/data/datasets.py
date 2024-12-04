@@ -755,77 +755,63 @@ class MSnRetrievalDataset(MSnDataset):
             self.candidates = json.load(file)
 
         # Filter out indices where SMILES are missing in candidates
-
-        self.canonical_smiles = []
-        for smi in self.smiles:
-            canonical_smi = self._canonicalize_smiles(smi)
-            if canonical_smi:
-                self.canonical_smiles.append(canonical_smi)
-            else:
-                print(f"Warning: Invalid SMILES '{smi}'. Skipping.")
-                self.canonical_smiles.append(None)  # Placeholder for invalid SMILES
-
-        # Canonicalize keys in self.candidates
-        self.candidates_canonical = {}
-        for key_smi, candidates in self.candidates.items():
-            canonical_key = self._canonicalize_smiles(key_smi)
-            if canonical_key:
-                self.candidates_canonical[canonical_key] = candidates
-            else:
-                print(f"Warning: Invalid SMILES in candidates '{key_smi}'. Skipping.")
-
-        # Now filter valid indices
         valid_indices = []
-        skipped_indices_counter = 0
-        for idx, canonical_smi in enumerate(self.canonical_smiles):
-            if canonical_smi and canonical_smi in self.candidates_canonical:
+        skipped_smiles = set()
+
+        for idx, smi in enumerate(self.smiles):
+            if smi in self.candidates:
                 valid_indices.append(idx)
             else:
-                skipped_indices_counter += 1
-        print(f"Warning: No candidates for {skipped_indices_counter} queries. Skipping.")
+                skipped_smiles.add(smi)
+        print(f"Warning: No candidates for {len(skipped_smiles)} smiles. Skipping.")
+        # Update the dataset to include only valid indices
         self.valid_indices = valid_indices
 
     def __len__(self):
         return len(self.valid_indices)
 
     def __getitem__(self, idx):
+
         # Map idx to the valid index
         valid_idx = self.valid_indices[idx]
 
         # Get the item from the parent class
+        # item is a dict with keys: 'spec' (spectral tree), 'mol' (transformed molecule)
         item = super().__getitem__(valid_idx)
 
-        # Retrieve the canonical SMILES for the current index
-        canonical_smi = self.canonical_smiles[valid_idx]
-        item["smiles"] = canonical_smi
+        # Retrieve the original SMILES for the current index
+        smi = self.smiles[valid_idx]
+        item["smiles"] = smi
 
         # Get candidates for the query molecule
-        item["candidates"] = self.candidates_canonical[canonical_smi]
+        if smi not in self.candidates:
+            raise ValueError(f'No candidates for the query molecule {smi}.')
+        item["candidates"] = self.candidates[smi]
 
-        # Save the original SMILES representations of the candidates
+        # Save the original SMILES representations of the candidates (for evaluation)
         item["candidates_smiles"] = item["candidates"]
 
         # Create labels by comparing the transformed query molecule with candidates
-        item_label = self.mol_label_transform(canonical_smi)
+        item_label = self.mol_label_transform(smi)
         item["labels"] = [
             self.mol_label_transform(c) == item_label for c in item["candidates"]
         ]
 
         if not any(item["labels"]):
             raise ValueError(
-                f'Query molecule {canonical_smi} not found in the candidates list.'
+                f'Query molecule {smi} not found in the candidates list.'
             )
 
         # Transform the query molecule and candidates
         if self.mol_transform:
             # Transform the query molecule
-            item["mol"] = self.mol_transform(canonical_smi)
+            item["mol"] = self.mol_transform(smi)
             if isinstance(item["mol"], np.ndarray):
                 item["mol"] = torch.as_tensor(item["mol"], dtype=self.dtype)
 
             # Transform the candidates
             item["candidates"] = [self.mol_transform(c) for c in item["candidates"]]
-            # Note: Convert candidates to tensors in collate_fn if necessary
+            # item["candidates"] = [torch.as_tensor(c, dtype=self.dtype) if isinstance(c, np.ndarray) else c for c in item["candidates"]]
 
         return item
 
