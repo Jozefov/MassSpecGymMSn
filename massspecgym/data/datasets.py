@@ -6,6 +6,8 @@ import numpy as np
 import torch
 from collections import deque
 import matchms
+from numpy.f2py.auxfuncs import throw_error
+
 import massspecgym.utils as utils
 from pathlib import Path
 from rdkit import Chem
@@ -190,7 +192,7 @@ class RetrievalDataset(MassSpecDataset):
             self.candidates = json.load(file)
 
     def __getitem__(self, i) -> dict:
-        item = super().__getitem__(i, transform_mol=False)
+        item = super().__getitem__(i, transform_mol=True)
 
         # Save the original SMILES representation of the query molecule (for evaluation)
         item["smiles"] = item["mol"]
@@ -704,3 +706,180 @@ class MSnDataset(MassSpecDataset):
         else:
             # If no mol_transform is provided, return the SMILES string
             return smi
+
+
+class MSnRetrievalDataset(MSnDataset):
+    """
+    Dataset containing MSn spectral trees and their corresponding molecular structures, with additional
+    candidates of molecules for retrieval based on spectral similarity.
+    """
+
+    def __init__(
+        self,
+        mol_label_transform: MolTransform = MolToInChIKey(),
+        candidates_pth: T.Optional[T.Union[Path, str]] = None,
+        **kwargs,
+    ):
+        """
+        Args:
+            mol_label_transform (MolTransform, optional): Transformation to apply to the candidate molecules.
+                Defaults to `MolToInChIKey()`.
+            candidates_pth (Optional[Union[Path, str]], optional): Path to the .json file containing the candidates for
+                retrieval. Defaults to None, in which case the candidates for standard `molecular retrieval` challenge
+                are downloaded from HuggingFace Hub.
+            **kwargs: Additional keyword arguments passed to MSnDataset.
+        """
+        super().__init__(**kwargs)
+
+        self.candidates_pth = candidates_pth
+        self.mol_label_transform = mol_label_transform
+
+        # Load candidates
+        # Download candidates from HuggingFace Hub if no path is provided
+        if self.candidates_pth is None:
+            self.candidates_pth = utils.hugging_face_download(
+                "molecules/MassSpecGym_retrieval_candidates_mass.json"
+            )
+        elif self.candidates_pth == 'bonus':
+            self.candidates_pth = utils.hugging_face_download(
+                "molecules/MassSpecGym_retrieval_candidates_formula.json"
+            )
+        elif isinstance(self.candidates_pth, str):
+            if Path(self.candidates_pth).is_file():
+                self.candidates_pth = Path(self.candidates_pth)
+            else:
+                self.candidates_pth = utils.hugging_face_download(self.candidates_pth)
+
+        # Read candidates_pth from json to dict: SMILES -> respective candidate SMILES
+        with open(self.candidates_pth, "r") as file:
+            self.candidates = json.load(file)
+
+        # Filter out indices where SMILES are missing in candidates
+
+        self.canonical_smiles = []
+        for smi in self.smiles:
+            canonical_smi = self._canonicalize_smiles(smi)
+            if canonical_smi:
+                self.canonical_smiles.append(canonical_smi)
+            else:
+                print(f"Warning: Invalid SMILES '{smi}'. Skipping.")
+                self.canonical_smiles.append(None)  # Placeholder for invalid SMILES
+
+        # Canonicalize keys in self.candidates
+        self.candidates_canonical = {}
+        for key_smi, candidates in self.candidates.items():
+            canonical_key = self._canonicalize_smiles(key_smi)
+            if canonical_key:
+                self.candidates_canonical[canonical_key] = candidates
+            else:
+                print(f"Warning: Invalid SMILES in candidates '{key_smi}'. Skipping.")
+
+        # Now filter valid indices
+        valid_indices = []
+        skipped_indices_counter = 0
+        for idx, canonical_smi in enumerate(self.canonical_smiles):
+            if canonical_smi and canonical_smi in self.candidates_canonical:
+                valid_indices.append(idx)
+            else:
+                skipped_indices_counter += 1
+        print(f"Warning: No candidates for {skipped_indices_counter} queries. Skipping.")
+        self.valid_indices = valid_indices
+
+    def __len__(self):
+        return len(self.valid_indices)
+
+    def __getitem__(self, idx):
+        # Map idx to the valid index
+        valid_idx = self.valid_indices[idx]
+
+        # Get the item from the parent class
+        item = super().__getitem__(valid_idx)
+
+        # Retrieve the canonical SMILES for the current index
+        canonical_smi = self.canonical_smiles[valid_idx]
+        item["smiles"] = canonical_smi
+
+        # Get candidates for the query molecule
+        item["candidates"] = self.candidates_canonical[canonical_smi]
+
+        # Save the original SMILES representations of the candidates
+        item["candidates_smiles"] = item["candidates"]
+
+        # Create labels by comparing the transformed query molecule with candidates
+        item_label = self.mol_label_transform(canonical_smi)
+        item["labels"] = [
+            self.mol_label_transform(c) == item_label for c in item["candidates"]
+        ]
+
+        if not any(item["labels"]):
+            raise ValueError(
+                f'Query molecule {canonical_smi} not found in the candidates list.'
+            )
+
+        # Transform the query molecule and candidates
+        if self.mol_transform:
+            # Transform the query molecule
+            item["mol"] = self.mol_transform(canonical_smi)
+            if isinstance(item["mol"], np.ndarray):
+                item["mol"] = torch.as_tensor(item["mol"], dtype=self.dtype)
+
+            # Transform the candidates
+            item["candidates"] = [self.mol_transform(c) for c in item["candidates"]]
+            # Note: Convert candidates to tensors in collate_fn if necessary
+
+        return item
+
+    @staticmethod
+    def collate_fn(batch: T.Iterable[dict]) -> dict:
+        """
+        Custom collate function to handle batches of spec, mol, candidates, and labels.
+        """
+        # Initialize the collated batch
+        collated_batch = {}
+
+        # Collate spectral trees (spec)
+        spec_trees = [item['spec'] for item in batch]
+        batch_spec_trees = Batch.from_data_list(spec_trees)
+        collated_batch['spec'] = batch_spec_trees
+
+        # Collate transformed molecules (mol)
+        mols = [item['mol'] for item in batch]
+        if isinstance(mols[0], torch.Tensor):
+            mols = torch.stack(mols)
+        collated_batch['mol'] = mols
+
+        # Collate other items except 'candidates', 'labels', 'candidates_smiles'
+        for k in batch[0].keys():
+            if k not in ['spec', 'mol', 'candidates', 'labels', 'candidates_smiles']:
+                collated_batch[k] = default_collate([item[k] for item in batch])
+
+        collated_candidates = []
+        for item in batch:
+            # TODO may to be faster then extend
+            # Ensure candidates are tensors
+            candidates = [torch.as_tensor(c, dtype=item['mol'].dtype) if not isinstance(c, torch.Tensor) else c for c in
+                          item['candidates']]
+            collated_candidates.extend(candidates)
+        collated_batch["candidates"] = torch.stack(collated_candidates)
+
+        collated_batch["labels"] = torch.as_tensor(
+            sum([item["labels"] for item in batch], start=[])
+        )
+
+        collated_batch["batch_ptr"] = torch.as_tensor(
+            [len(item["candidates"]) for item in batch]
+        )
+
+        collated_batch["candidates_smiles"] = sum(
+            [item["candidates_smiles"] for item in batch], start=[]
+        )
+
+        return collated_batch
+
+    @staticmethod
+    def _canonicalize_smiles(smiles):
+        mol = Chem.MolFromSmiles(smiles)
+        if mol:
+            return Chem.MolToSmiles(mol, canonical=True)
+        else:
+            return None
