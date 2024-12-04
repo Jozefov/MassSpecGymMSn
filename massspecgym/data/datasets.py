@@ -776,13 +776,13 @@ class MSnRetrievalDataset(MSnDataset):
 
         # Now filter valid indices
         valid_indices = []
-        skipped_indices_counter = 0
+        skipped_molecules = set()
         for idx, canonical_smi in enumerate(self.canonical_smiles):
             if canonical_smi and canonical_smi in self.candidates_canonical:
                 valid_indices.append(idx)
             else:
-                skipped_indices_counter += 1
-        print(f"Warning: No candidates for {skipped_indices_counter} queries. Skipping.")
+                skipped_molecules.add(canonical_smi)
+        print(f"Warning: No candidates for {len(skipped_molecules)} queries. Skipping.")
         self.valid_indices = valid_indices
 
     def __len__(self):
