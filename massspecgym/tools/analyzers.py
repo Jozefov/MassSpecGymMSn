@@ -1,6 +1,7 @@
 from collections import defaultdict, deque
 import typing as T
 import numpy as np
+from rdkit import Chem
 import pandas as pd
 from collections import defaultdict, Counter
 from massspecgym.data.datasets import MSnDataset
@@ -447,4 +448,73 @@ def compute_fold_statistics(msn_dataset: MSnDataset, smiles_to_fold: T.Dict[str,
 
     return fold_stats
 
+def analyze_canonical_smiles(data, mode='spectra'):
+    """
+    Processes SMILES strings from either filtered spectra or JSON data,
+    extracting original and canonical SMILES sets, and computing relevant statistics.
+
+    Parameters:
+    - data (list or dict):
+        - If mode='spectra', a list of Spectrum objects.
+        - If mode='json', a dictionary with SMILES strings as keys.
+    - mode (str): Mode of processing. Either 'spectra' or 'json'.
+
+    Returns:
+    - original_smiles_set (set): SMILES strings as extracted from the input.
+    - canonical_smiles_set (set): Canonicalized SMILES strings.
+    - invalid_smiles (set): SMILES strings that could not be canonicalized.
+    """
+    # Initialize sets to store SMILES
+    original_smiles_set = set()
+    canonical_smiles_set = set()
+    invalid_smiles = set()
+
+    # Validate mode
+    if mode not in ['spectra', 'json']:
+        raise ValueError("Invalid mode. Choose 'spectra' or 'json'.")
+
+    if mode == 'spectra':
+        for spectrum in data:
+            # Extract SMILES from spectrum metadata
+            smiles = spectrum.metadata.get("SMILES") or spectrum.metadata.get("smiles")
+            if smiles:
+                original_smiles_set.add(smiles)
+                # Canonicalize SMILES using RDKit
+                mol = Chem.MolFromSmiles(smiles)
+                if mol:
+                    canonical_smiles = Chem.MolToSmiles(mol, canonical=True)
+                    canonical_smiles_set.add(canonical_smiles)
+                else:
+                    invalid_smiles.add(smiles)
+    elif mode == 'json':
+        if not isinstance(data, dict):
+            raise TypeError("For mode 'json', data must be a dictionary with SMILES as keys.")
+        for smiles in data.keys():
+            original_smiles_set.add(smiles)
+            # Canonicalize SMILES using RDKit
+            mol = Chem.MolFromSmiles(smiles)
+            if mol:
+                canonical_smiles = Chem.MolToSmiles(mol, canonical=True)
+                canonical_smiles_set.add(canonical_smiles)
+            else:
+                invalid_smiles.add(smiles)
+
+    # Compute statistics
+    total_smiles = len(original_smiles_set)
+    unique_original = len(original_smiles_set)
+    unique_canonical = len(canonical_smiles_set)
+    num_invalid = len(invalid_smiles)
+    # Intersection counts how many original SMILES are already canonical
+    intersection_count = len(original_smiles_set.intersection(canonical_smiles_set))
+
+    print("=== SMILES Processing Statistics ===")
+    print(f"Mode: {mode.upper()}")
+    print(f"Total SMILES extracted: {total_smiles}")
+    print(f"Unique original SMILES: {unique_original}")
+    print(f"Unique canonical SMILES: {unique_canonical}")
+    print(f"Number of invalid SMILES: {num_invalid}")
+    print(f"Number of SMILES unchanged after canonicalization: {intersection_count}")
+    print("====================================\n")
+
+    return original_smiles_set, canonical_smiles_set, invalid_smiles
 
