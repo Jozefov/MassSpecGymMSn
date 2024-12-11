@@ -465,6 +465,8 @@ def analyze_canonical_smiles(data, mode='spectra'):
     - canonical_smiles_set (set): Canonicalized SMILES strings.
     - invalid_smiles (set): SMILES strings that could not be canonicalized.
     """
+
+    print("==== RDKit Canonical SMILES ====")
     # Initialize sets to store SMILES
     original_smiles_set = set()
     canonical_smiles_set = set()
