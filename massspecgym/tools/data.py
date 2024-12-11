@@ -1,7 +1,12 @@
 import random
 from tqdm.notebook import tqdm
 import pandas as pd
+import json
+import time
+import os
+from matchms import Spectrum
 from rdkit import Chem
+import typing as T
 
 from massspecgym.tools.murcko_hist import are_sub_hists, murcko_hist
 
@@ -174,3 +179,124 @@ def split_by_murcko_histograms(df_us, df_gb, val_fraction=0.10, test_fraction=0.
             for smiles in row['smiles_list']:
                 smiles_to_fold[smiles] = fold
     return smiles_to_fold
+
+def canonicalize_smiles_in_spectra(
+    spectra_list: T.List[Spectrum],
+    standardize_smiles_func: T.Callable[[T.Union[str, T.List[str]]], T.Union[str, T.List[str]]],
+    save_path: str,
+    batch_size: int = 500,
+    max_retries: int = 10,
+    delay_between_retries: int = 60  # in seconds
+) -> T.Dict[str, str]:
+    """
+    Canonicalize SMILES in a list of spectrum objects.
+
+    Args:
+        spectra_list: List of Spectrum objects.
+        standardize_smiles_func: Function to standardize SMILES.
+        save_path: Path to save the progress dictionary.
+        batch_size: Number of SMILES to process before saving progress.
+        max_retries: Maximum number of retries if the database is not reachable.
+        delay_between_retries: Delay between retries in seconds.
+
+    Returns:
+        Dictionary mapping original SMILES to canonical SMILES.
+    """
+    # Extract all unique SMILES from spectra
+    all_smiles = set()
+    for spectrum in spectra_list:
+        smiles = spectrum.metadata.get('smiles')
+        if smiles:
+            all_smiles.add(smiles)
+
+    print(f"Total unique SMILES to process: {len(all_smiles)}")
+
+    # Check if there is a saved progress file
+    if os.path.exists(save_path):
+        print(f"Resuming from saved progress at {save_path}")
+        with open(save_path, 'r') as f:
+            smiles_dict = json.load(f)
+    else:
+        smiles_dict = {}
+
+    processed_smiles = set(smiles_dict.keys())
+    remaining_smiles = all_smiles - processed_smiles
+    print(f"SMILES remaining to process: {len(remaining_smiles)}")
+
+    smiles_list = list(remaining_smiles)
+    total_smiles = len(smiles_list)
+
+    # For saving progress
+    batch_counter = 0
+    for idx, original_smiles in enumerate(smiles_list, 1):
+        retries = 0
+        success = False
+        while retries < max_retries and not success:
+            try:
+                # Canonicalize the SMILES
+                canonical_smiles = standardize_smiles_func(original_smiles)
+                if not canonical_smiles:
+                    print(f"Warning: Invalid SMILES '{original_smiles}'. Skipping.")
+                    canonical_smiles = None
+                else:
+                    # If the function returns a list, extract the first element
+                    if isinstance(canonical_smiles, list):
+                        canonical_smiles = canonical_smiles[0]
+                smiles_dict[original_smiles] = canonical_smiles
+                success = True
+            except Exception as e:
+                retries += 1
+                print(f"Error processing SMILES '{original_smiles}': {e}")
+                if retries < max_retries:
+                    print(f"Retrying in {delay_between_retries} seconds... (Attempt {retries}/{max_retries})")
+                    time.sleep(delay_between_retries)
+                else:
+                    print(f"Max retries reached for SMILES '{original_smiles}'. Skipping.")
+                    smiles_dict[original_smiles] = None  # Mark as failed
+
+        batch_counter += 1
+        # Save progress every batch_size SMILES or at the end
+        if batch_counter >= batch_size or idx == total_smiles:
+            print(f"Processing progress: {idx}/{total_smiles} SMILES")
+            with open(save_path, 'w') as f:
+                json.dump(smiles_dict, f)
+            print(f"Progress saved to {save_path}")
+            batch_counter = 0
+
+    print("Canonicalization completed.")
+    return smiles_dict
+
+def handle_problematic_smiles(problematic_smiles, standardize_smiles_func):
+    """
+    Takes a list of problematic SMILES strings, validates and canonicalizes them using RDKit,
+    then sends the RDKit-canonicalized SMILES to PubChem for standardization.
+    Returns a dictionary mapping the original problematic SMILES to the PubChem-canonicalized SMILES.
+    Args:
+        problematic_smiles: List of SMILES strings that could not be canonicalized initially.
+        standardize_smiles_func: Function to standardize SMILES.
+
+    Returns:
+        Dictionary mapping original problematic SMILES to PubChem-canonicalized SMILES.
+    """
+
+    unique_problematic_smiles = set(problematic_smiles)
+    mapping_dict = {}
+
+    for smi in unique_problematic_smiles:
+        mol = Chem.MolFromSmiles(smi)
+        if mol:
+            rdkit_canonical_smi = Chem.MolToSmiles(mol, canonical=True)
+            try:
+                pubchem_canonical_smi = standardize_smiles_func(rdkit_canonical_smi)
+                if isinstance(pubchem_canonical_smi, list):
+                    pubchem_canonical_smi = pubchem_canonical_smi[0]
+                mapping_dict[smi] = pubchem_canonical_smi
+                print(f"Canonicalized '{smi}' to '{pubchem_canonical_smi}'")
+            except Exception as e:
+                print(f"Error standardizing SMILES '{smi}' after RDKit canonicalization: {e}")
+                mapping_dict[smi] = None
+        else:
+            print(f"Cannot canonicalize invalid SMILES '{smi}'.")
+            mapping_dict[smi] = None
+
+    return mapping_dict
