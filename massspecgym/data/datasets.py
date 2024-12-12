@@ -192,57 +192,70 @@ class RetrievalDataset(MassSpecDataset):
             self.candidates = json.load(file)
 
     def __getitem__(self, i) -> dict:
-        item = super().__getitem__(i, transform_mol=True)
+        # Get base item (spec, mol, and metadata)
+        item = super().__getitem__(i, transform_mol=False)
 
-        # Save the original SMILES representation of the query molecule (for evaluation)
+        # Save original SMILES
         item["smiles"] = item["mol"]
 
-        # Get candidates
+        # Retrieve candidates
         if item["mol"] not in self.candidates:
             raise ValueError(f'No candidates for the query molecule {item["mol"]}.')
         item["candidates"] = self.candidates[item["mol"]]
 
-        # Save the original SMILES representations of the canidates (for evaluation)
+        # Save candidates_smiles
         item["candidates_smiles"] = item["candidates"]
 
-        # Create neg/pos label mask by matching the query molecule with the candidates
+        # Create labels
         item_label = self.mol_label_transform(item["mol"])
         item["labels"] = [
             self.mol_label_transform(c) == item_label for c in item["candidates"]
         ]
-
         if not any(item["labels"]):
             raise ValueError(
                 f'Query molecule {item["mol"]} not found in the candidates list.'
             )
 
-        # Transform the query and candidate molecules
+        # Transform query and candidates
         item["mol"] = self.mol_transform(item["mol"])
         item["candidates"] = [self.mol_transform(c) for c in item["candidates"]]
+
+        # Convert query mol to tensor if needed
         if isinstance(item["mol"], np.ndarray):
             item["mol"] = torch.as_tensor(item["mol"], dtype=self.dtype)
-            # item["candidates"] = [torch.as_tensor(c, dtype=self.dtype) for c in item["candidates"]]
+
+        # Convert all candidates to tensors
+        item["candidates"] = [
+            torch.as_tensor(c, dtype=self.dtype) if isinstance(c, np.ndarray) else c
+            for c in item["candidates"]
+        ]
 
         return item
 
     @staticmethod
     def collate_fn(batch: T.Iterable[dict]) -> dict:
-        # Standard collate for everything except candidates and their labels (which may have different length per sample)
+        # Collate everything except candidates/labels/candidates_smiles using default_collate
         collated_batch = {}
         for k in batch[0].keys():
             if k not in ["candidates", "labels", "candidates_smiles"]:
                 collated_batch[k] = default_collate([item[k] for item in batch])
 
-        # Collate candidates and labels by concatenating and storing sizes of each list
+        # Candidates: concatenate along first dimension
         collated_batch["candidates"] = torch.as_tensor(
             np.concatenate([item["candidates"] for item in batch])
         )
+
+        # Labels: flatten into a single 1D tensor
         collated_batch["labels"] = torch.as_tensor(
             sum([item["labels"] for item in batch], start=[])
         )
+
+        # batch_ptr: number of candidates per example
         collated_batch["batch_ptr"] = torch.as_tensor(
             [len(item["candidates"]) for item in batch]
         )
+
+        # candidates_smiles: just sum lists
         collated_batch["candidates_smiles"] = \
             sum([item["candidates_smiles"] for item in batch], start=[])
 
@@ -763,16 +776,31 @@ class MSnRetrievalDataset(MSnDataset):
                 valid_indices.append(idx)
             else:
                 skipped_smiles.add(smi)
+
         print(f"Warning: No candidates for {len(skipped_smiles)} smiles. Skipping.")
         # Update the dataset to include only valid indices
         self.valid_indices = valid_indices
+
+        # Re-map root_identifier_to_index to only include valid_indices after filtering on candidates
+        new_root_identifier_to_index = {}
+        for new_idx, old_idx in enumerate(self.valid_indices):
+            root_id = self.trees[old_idx].root.spectrum.get('identifier')
+            new_root_identifier_to_index[root_id] = new_idx
+        self.root_identifier_to_index = new_root_identifier_to_index
+
+        print(f"Total valid indices: {len(self.valid_indices)}")
+        print(f"Dataset length: {len(self)}")
+
+
 
     def __len__(self):
         return len(self.valid_indices)
 
     def __getitem__(self, idx):
 
+        print("in getitem")
         # Map idx to the valid index
+        print(idx)
         valid_idx = self.valid_indices[idx]
 
         # Get the item from the parent class
@@ -783,13 +811,22 @@ class MSnRetrievalDataset(MSnDataset):
         smi = self.smiles[valid_idx]
         item["smiles"] = smi
 
+        # print("1")
+        # print(item)
+
         # Get candidates for the query molecule
         if smi not in self.candidates:
             raise ValueError(f'No candidates for the query molecule {smi}.')
         item["candidates"] = self.candidates[smi]
 
+        # print("2")
+        # print(item)
+
         # Save the original SMILES representations of the candidates (for evaluation)
         item["candidates_smiles"] = item["candidates"]
+
+        # print("3")
+        # print(item)
 
         # Create labels by comparing the transformed query molecule with candidates
         item_label = self.mol_label_transform(smi)
@@ -797,10 +834,16 @@ class MSnRetrievalDataset(MSnDataset):
             self.mol_label_transform(c) == item_label for c in item["candidates"]
         ]
 
+        # print("4")
+        # print(item)
+
         if not any(item["labels"]):
             raise ValueError(
                 f'Query molecule {smi} not found in the candidates list.'
             )
+
+        # print("5")
+        # print(item)
 
         # Transform the query molecule and candidates
         if self.mol_transform:
@@ -811,8 +854,10 @@ class MSnRetrievalDataset(MSnDataset):
 
             # Transform the candidates
             item["candidates"] = [self.mol_transform(c) for c in item["candidates"]]
-            # item["candidates"] = [torch.as_tensor(c, dtype=self.dtype) if isinstance(c, np.ndarray) else c for c in item["candidates"]]
+            item["candidates"] = [torch.as_tensor(c, dtype=self.dtype) if isinstance(c, np.ndarray) else c for c in item["candidates"]]
 
+        # print("6")
+        # print(item)
         return item
 
     @staticmethod
@@ -820,6 +865,7 @@ class MSnRetrievalDataset(MSnDataset):
         """
         Custom collate function to handle batches of spec, mol, candidates, and labels.
         """
+        print("in collate_fn")
         # Initialize the collated batch
         collated_batch = {}
 
@@ -828,16 +874,25 @@ class MSnRetrievalDataset(MSnDataset):
         batch_spec_trees = Batch.from_data_list(spec_trees)
         collated_batch['spec'] = batch_spec_trees
 
+        # print("1")
+        # print(collated_batch)
+
         # Collate transformed molecules (mol)
         mols = [item['mol'] for item in batch]
         if isinstance(mols[0], torch.Tensor):
             mols = torch.stack(mols)
         collated_batch['mol'] = mols
 
+        # print("2")
+        # print(collated_batch)
+
         # Collate other items except 'candidates', 'labels', 'candidates_smiles'
         for k in batch[0].keys():
             if k not in ['spec', 'mol', 'candidates', 'labels', 'candidates_smiles']:
                 collated_batch[k] = default_collate([item[k] for item in batch])
+
+        # print("3")
+        # print(collated_batch)
 
         collated_candidates = []
         for item in batch:
@@ -848,16 +903,28 @@ class MSnRetrievalDataset(MSnDataset):
             collated_candidates.extend(candidates)
         collated_batch["candidates"] = torch.stack(collated_candidates)
 
+        # print("4")
+        # print(collated_batch)
+
         collated_batch["labels"] = torch.as_tensor(
             sum([item["labels"] for item in batch], start=[])
         )
+
+        # print("5")
+        # print(collated_batch)
 
         collated_batch["batch_ptr"] = torch.as_tensor(
             [len(item["candidates"]) for item in batch]
         )
 
+        # print("6")
+        # print(collated_batch)
+
         collated_batch["candidates_smiles"] = sum(
             [item["candidates_smiles"] for item in batch], start=[]
         )
+
+        # print("7")
+        # print(collated_batch)
 
         return collated_batch

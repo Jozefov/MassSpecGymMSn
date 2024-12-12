@@ -63,9 +63,10 @@ class MassSpecDataModule(pl.LightningDataModule):
             split_identifiers = set(self.split["identifier"])
 
             if dataset_identifiers != split_identifiers:
-                raise ValueError(
-                    "Dataset item IDs must match the IDs in the split file."
-                )
+                print("Warning: Some identifiers in the split file are not found in the dataset. Taking intersection.")
+                common_ids = dataset_identifiers.intersection(split_identifiers)
+                # Filter the split to include only common identifiers
+                self.split = self.split[self.split["identifier"].isin(common_ids)]
 
         self.split = self.split.set_index("identifier")["fold"]
         if not set(self.split) <= {"train", "val", "test"}:
@@ -100,6 +101,11 @@ class MassSpecDataModule(pl.LightningDataModule):
                 self.val_dataset = Subset(self.dataset, np.where(split_mask == "val")[0])
             if stage == "test":
                 self.test_dataset = Subset(self.dataset, np.where(split_mask == "test")[0])
+
+        print(f"Train dataset size: {len(self.train_dataset)}")
+        print(f"Val dataset size: {len(self.val_dataset)}")
+        # if self.test_dataset:
+        #     print(f"Test dataset size: {len(self.test_dataset)}")
 
     def train_dataloader(self):
         return DataLoader(
