@@ -70,7 +70,7 @@ class MassSpecDataset(Dataset):
             self.metadata = pd.DataFrame([s.metadata for s in self.spectra])
         else:
             raise ValueError(f"{self.pth.suffix} file format not supported.")
-        
+
         if self.return_mol_freq:
             if "inchikey" not in self.metadata.columns:
                 self.metadata["inchikey"] = self.metadata["smiles"].apply(utils.smiles_to_inchi_key)
@@ -251,6 +251,7 @@ class RetrievalDataset(MassSpecDataset):
         )
 
         # batch_ptr: number of candidates per example
+        print("I am not here")
         collated_batch["batch_ptr"] = torch.as_tensor(
             [len(item["candidates"]) for item in batch]
         )
@@ -372,7 +373,7 @@ class Tree:
 
     def __repr__(self):
         return repr(self.root)
-        
+
     def add_path(self, path: List[float]) -> None:
         # self.paths.append(path)
         if path[0] == self.root.value:
@@ -661,7 +662,7 @@ class MSnDataset(MassSpecDataset):
                 cur_path_group.append((msn_precursor_mzs, spectrum))
 
         return all_tree_paths
-    
+
     def get_all_deviations(self) -> List[Tuple[str, float, float, float]]:
         """
         Aggregates all deviations from all trees into a single list.
@@ -699,7 +700,7 @@ class MSnDataset(MassSpecDataset):
 
     def _get_tree_depths(self, trees):
         return [tree.get_depth() for tree in trees]
-    
+
     def _get_branching_factors(self, trees):
         return [tree.get_branching_factor() for tree in trees]
 
