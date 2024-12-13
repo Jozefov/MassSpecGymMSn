@@ -7,6 +7,7 @@ import os
 from matchms import Spectrum
 from rdkit import Chem
 import typing as T
+from massspecgym import utils
 
 from massspecgym.tools.murcko_hist import are_sub_hists, murcko_hist
 
@@ -300,3 +301,35 @@ def handle_problematic_smiles(problematic_smiles, standardize_smiles_func):
             mapping_dict[smi] = None
 
     return mapping_dict
+
+
+def compute_mol_freq_from_inchi_like_col(metadata: pd.DataFrame, col_name: str) -> pd.DataFrame:
+    """
+    Takes a dataframe 'metadata' and the name of a column containing an INCHI-like string.
+    It will extract the first 14 characters from that column to form an 'inchikey_aux' column.
+    """
+    # Ensure the column exists
+    if col_name not in metadata.columns:
+        print("Warning: Column '{}' not found in metadata. Computing from smiles.".format(col_name))
+        metadata["inchikey_aux"] = metadata["smiles"].apply(utils.smiles_to_inchi_key)
+
+    # Extract the first 14 characters from the given column to form inchikey_aux
+    metadata["inchikey_aux"] = metadata[col_name].apply(lambda x: x[:14] if isinstance(x, str) else "")
+
+    # Filter root rows (ms_level=2)
+    root_rows = metadata[metadata["ms_level"] == 2]
+
+    # Check for multiple root rows with same identifier
+    if "identifier" in root_rows.columns:
+        dup_identifiers = root_rows[root_rows.duplicated("identifier", keep=False)]
+        if not dup_identifiers.empty:
+            print("Warning: Multiple rows with the same identifier at ms_level=2 detected.")
+            print(dup_identifiers[["identifier"]])
+
+    # Compute mol_freq from root rows only
+    mol_freq_map = root_rows.groupby("inchikey_aux").size().to_dict()
+
+    # Map this mol_freq back to all rows by inchikey_aux
+    metadata["mol_freq"] = metadata["inchikey_aux"].map(mol_freq_map).fillna(0).astype(float)
+
+    return metadata
