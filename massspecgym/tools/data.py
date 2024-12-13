@@ -303,21 +303,21 @@ def handle_problematic_smiles(problematic_smiles, standardize_smiles_func):
     return mapping_dict
 
 
-def compute_mol_freq_from_inchi_like_col(metadata: pd.DataFrame, col_name: str) -> pd.DataFrame:
+def compute_root_mol_freq(metadata: pd.DataFrame, col_name: str) -> pd.DataFrame:
     """
     Takes a dataframe 'metadata' and the name of a column containing an INCHI-like string.
-    It will extract the first 14 characters from that column to form an 'inchikey_aux' column.
+    It will extract the first 14 characters from that column to form an 'inchi_key' column.
     """
     # Ensure the column exists
     if col_name not in metadata.columns:
         print("Warning: Column '{}' not found in metadata. Computing from smiles.".format(col_name))
-        metadata["inchikey_aux"] = metadata["smiles"].apply(utils.smiles_to_inchi_key)
-
-    # Extract the first 14 characters from the given column to form inchikey_aux
-    metadata["inchikey_aux"] = metadata[col_name].apply(lambda x: x[:14] if isinstance(x, str) else "")
+        metadata["inchi_key"] = metadata["smiles"].apply(utils.smiles_to_inchi_key)
+    else:
+        # Extract the first 14 characters from the given column to form inchikey_aux
+        metadata["inchi_key"] = metadata[col_name].apply(lambda x: x[:14] if isinstance(x, str) else "")
 
     # Filter root rows (ms_level=2)
-    root_rows = metadata[metadata["ms_level"] == 2]
+    root_rows = metadata[metadata["ms_level"] == str(2)]
 
     # Check for multiple root rows with same identifier
     if "identifier" in root_rows.columns:
@@ -327,9 +327,9 @@ def compute_mol_freq_from_inchi_like_col(metadata: pd.DataFrame, col_name: str) 
             print(dup_identifiers[["identifier"]])
 
     # Compute mol_freq from root rows only
-    mol_freq_map = root_rows.groupby("inchikey_aux").size().to_dict()
+    mol_freq_map = root_rows.groupby("inchi_key").size().to_dict()
 
     # Map this mol_freq back to all rows by inchikey_aux
-    metadata["mol_freq"] = metadata["inchikey_aux"].map(mol_freq_map).fillna(0).astype(float)
+    metadata["mol_freq"] = metadata["inchi_key"].map(mol_freq_map).fillna(0).astype(float)
 
     return metadata
