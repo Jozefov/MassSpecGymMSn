@@ -18,7 +18,7 @@ from torch_geometric.data import Data, Batch
 from matchms.importing import load_from_mgf
 from massspecgym.featurize import SpectrumFeaturizer
 from massspecgym.data.transforms import SpecTransform, MolTransform, MolToInChIKey
-
+from massspecgym.tools.data import compute_root_mol_freq
 
 class MassSpecDataset(Dataset):
     """
@@ -542,23 +542,25 @@ class Tree:
 
 class MSnDataset(MassSpecDataset):
     def __init__(self, pth=None, dtype=torch.float32, mol_transform=None, featurizer=None,
-                 max_allowed_deviation: float = 0.005, prune_missing_spectra=True, hierarchical_tree=True):
+                 max_allowed_deviation: float = 0.005, prune_missing_spectra=True, hierarchical_tree=True, return_mol_freq=True):
         # load dataset using the parent class
-        super().__init__(pth=pth)
+        super().__init__(pth=pth, return_mol_freq=False)
 
         self.mol_transform = mol_transform
         self.max_allowed_deviation = max_allowed_deviation
         self.dtype = dtype
         self.metadata = self.metadata[self.metadata["spectype"] == "ALL_ENERGIES"]
+        self.featurizer = featurizer
+        self.return_mol_freq = return_mol_freq
 
-        # TODO: add identifiers (and split?) to the mgf file
+
+        # Assume the metadata includes 'inchi_aux' column
+        if self.return_mol_freq:
+            self.metadata = compute_root_mol_freq(self.metadata, "inchi_aux")
 
         # Map identifier to spectra
         # Create mappings from 'IDENTIFIER' to spectra and spectra indices
         self.identifier_to_spectrum = {spectrum.get('identifier'): spectrum for spectrum in self.spectra}
-
-        # Create feaurizer that wil parse and annotate PYG data
-        self.featurizer = featurizer
 
         # get paths from the metadata
         self.all_tree_paths = self._parse_paths_from_df(self.metadata)
@@ -609,11 +611,23 @@ class MSnDataset(MassSpecDataset):
             item["precursor_mz"] = precursor_mz
             item["adduct"] = adduct
             item["identifier"] = identifier
+
+            if self.return_mol_freq:
+                row = self.metadata[self.metadata["identifier"] == identifier]
+                if len(row) == 1:
+                    mol_freq = row["mol_freq"].values[0]
+                else:
+                    # If not found or multiple found, default to NaN
+                    mol_freq = float('nan')
+                item["mol_freq"] = mol_freq
+
         else:
             # If there is no root spectrum, set defaults
             item["precursor_mz"] = float('nan')
             item["adduct"] = ""
             item["identifier"] = ""
+            if self.return_mol_freq:
+                item["mol_freq"] = float('nan')
 
         # Convert all numeric fields to tensors, keep strings as is
         for k, v in item.items():
@@ -834,9 +848,7 @@ class MSnRetrievalDataset(MSnDataset):
 
     def __getitem__(self, idx):
 
-        print("in getitem")
         # Map idx to the valid index
-        print(idx)
         valid_idx = self.valid_indices[idx]
 
         # Get the item from the parent class
@@ -847,22 +859,13 @@ class MSnRetrievalDataset(MSnDataset):
         smi = self.smiles[valid_idx]
         item["smiles"] = smi
 
-        # print("1")
-        # print(item)
-
         # Get candidates for the query molecule
         if smi not in self.candidates:
             raise ValueError(f'No candidates for the query molecule {smi}.')
         item["candidates"] = self.candidates[smi]
 
-        # print("2")
-        # print(item)
-
         # Save the original SMILES representations of the candidates (for evaluation)
         item["candidates_smiles"] = item["candidates"]
-
-        # print("3")
-        # print(item)
 
         # Create labels by comparing the transformed query molecule with candidates
         item_label = self.mol_label_transform(smi)
@@ -870,16 +873,10 @@ class MSnRetrievalDataset(MSnDataset):
             self.mol_label_transform(c) == item_label for c in item["candidates"]
         ]
 
-        # print("4")
-        # print(item)
-
         if not any(item["labels"]):
             raise ValueError(
                 f'Query molecule {smi} not found in the candidates list.'
             )
-
-        # print("5")
-        # print(item)
 
         # Transform the query molecule and candidates
         if self.mol_transform:
@@ -892,8 +889,6 @@ class MSnRetrievalDataset(MSnDataset):
             item["candidates"] = [self.mol_transform(c) for c in item["candidates"]]
             item["candidates"] = [torch.as_tensor(c, dtype=self.dtype) if isinstance(c, np.ndarray) else c for c in item["candidates"]]
 
-        # print("6")
-        # print(item)
         return item
 
     @staticmethod
@@ -910,25 +905,16 @@ class MSnRetrievalDataset(MSnDataset):
         batch_spec_trees = Batch.from_data_list(spec_trees)
         collated_batch['spec'] = batch_spec_trees
 
-        # print("1")
-        # print(collated_batch)
-
         # Collate transformed molecules (mol)
         mols = [item['mol'] for item in batch]
         if isinstance(mols[0], torch.Tensor):
             mols = torch.stack(mols)
         collated_batch['mol'] = mols
 
-        # print("2")
-        # print(collated_batch)
-
         # Collate other items except 'candidates', 'labels', 'candidates_smiles'
         for k in batch[0].keys():
             if k not in ['spec', 'mol', 'candidates', 'labels', 'candidates_smiles']:
                 collated_batch[k] = default_collate([item[k] for item in batch])
-
-        # print("3")
-        # print(collated_batch)
 
         collated_candidates = []
         for item in batch:
@@ -939,28 +925,16 @@ class MSnRetrievalDataset(MSnDataset):
             collated_candidates.extend(candidates)
         collated_batch["candidates"] = torch.stack(collated_candidates)
 
-        # print("4")
-        # print(collated_batch)
-
         collated_batch["labels"] = torch.as_tensor(
             sum([item["labels"] for item in batch], start=[])
         )
-
-        # print("5")
-        # print(collated_batch)
 
         collated_batch["batch_ptr"] = torch.as_tensor(
             [len(item["candidates"]) for item in batch]
         )
 
-        # print("6")
-        # print(collated_batch)
-
         collated_batch["candidates_smiles"] = sum(
             [item["candidates_smiles"] for item in batch], start=[]
         )
-
-        # print("7")
-        # print(collated_batch)
 
         return collated_batch
