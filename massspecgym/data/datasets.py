@@ -592,6 +592,34 @@ class MSnDataset(MassSpecDataset):
         mol_feature = self.mol_features[idx]
 
         item = {"spec": spec_tree, "mol": mol_feature}
+
+        # Extract additional attributes from the tree's root spectrum
+        root_spectrum = self.trees[idx].root.spectrum
+        if root_spectrum is not None:
+            precursor_mz = root_spectrum.get('precursor_mz')
+
+            if precursor_mz is not None:
+                precursor_mz = float(precursor_mz)
+            else:
+                precursor_mz = float('nan')
+
+            adduct = root_spectrum.get('adduct', "")
+            identifier = root_spectrum.get('identifier', "")
+
+            item["precursor_mz"] = precursor_mz
+            item["adduct"] = adduct
+            item["identifier"] = identifier
+        else:
+            # If there is no root spectrum, set defaults
+            item["precursor_mz"] = float('nan')
+            item["adduct"] = ""
+            item["identifier"] = ""
+
+        # Convert all numeric fields to tensors, keep strings as is
+        for k, v in item.items():
+            if not isinstance(v, str) and k != 'spec':
+                item[k] = torch.as_tensor(v, dtype=self.dtype)
+
         return item
 
     @staticmethod
@@ -600,14 +628,21 @@ class MSnDataset(MassSpecDataset):
         Custom collate function to handle batches of spec_tree and mol.
         """
 
+        collated_batch = {}
+
         spec_trees = [item['spec'] for item in batch]
         mols = [item['mol'] for item in batch]
 
         batch_spec_trees = Batch.from_data_list(spec_trees)
         mols = torch.stack(mols) if isinstance(mols[0], torch.Tensor) else mols
 
-        return {'spec': batch_spec_trees, 'mol': mols}
+        collated_batch["spec"] = batch_spec_trees
+        collated_batch["mol"] = mols
+        for k in batch[0].keys():
+            if k not in ['spec', 'mol', 'candidates', 'labels', 'candidates_smiles']:
+                collated_batch[k] = default_collate([item[k] for item in batch])
 
+        return collated_batch
 
     def _parse_paths_from_df(self, df) -> List[Tuple[str, float, List[Tuple[List[float], matchms.Spectrum]], matchms.Spectrum]]:
         all_tree_paths = []
