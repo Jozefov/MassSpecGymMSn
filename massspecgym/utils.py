@@ -399,7 +399,7 @@ class MyopicMCESNew:
                 raise e  # Reraise the error if not catching
 
 
-class MyopicMCES():
+class MyopicMCES:
     def __init__(
         self,
         ind: int = 0,  # dummy index
