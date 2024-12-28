@@ -1,15 +1,21 @@
-import random
 from tqdm.notebook import tqdm
 import pandas as pd
 import json
 import time
 import os
+from collections import deque, defaultdict
+from math import comb
+import numpy as np
+
+import random
 from matchms import Spectrum
 from rdkit import Chem
 import typing as T
+from typing import List, Dict, Tuple, Optional
 from massspecgym import utils
 
 from massspecgym.tools.murcko_hist import are_sub_hists, murcko_hist
+from massspecgym.tools.metrics import dreams_embedding_similarity, compute_cosine_greedy_score, compute_cosine_hungarian_score
 
 def compute_murcko_histograms(df):
     """
@@ -333,3 +339,305 @@ def compute_root_mol_freq(metadata: pd.DataFrame, col_name: str) -> pd.DataFrame
     metadata["mol_freq"] = metadata["inchi_key"].map(mol_freq_map).fillna(0).astype(float)
 
     return metadata
+
+
+def get_spectrum(node) -> Optional[Spectrum]:
+    """Return the matchms.Spectrum from a node."""
+    if node is None or node.spectrum is None:
+        return None
+    return node.spectrum
+
+def get_embedding_for_node(node, embeddings_dict: Dict[str, np.ndarray]) -> Optional[np.ndarray]:
+    """Return embedding from a dictionary that maps identifier->embedding."""
+    if node is None or node.spectrum is None:
+        return None
+    identifier = node.spectrum.get('identifier', None)
+    if identifier is None:
+        return None
+    return embeddings_dict.get(identifier, None)
+
+def get_ms_level(node) -> Optional[int]:
+    """Return the ms_level from node's spectrum metadata if present."""
+    if node is None or node.spectrum is None:
+        return None
+    ms_level_str = node.spectrum.get('ms_level', None)
+    if ms_level_str is not None:
+        return int(ms_level_str)
+    return None
+
+def compute_ancestor_descendant_similarity(tree,
+                                           use_embedding: bool=False,
+                                           sim_fn=None,
+                                           embeddings_dict: Optional[Dict[str, np.ndarray]]=None,
+                                           tolerance: float=0.1) -> List[float]:
+    """
+    For each parent->child in the tree, compute similarity.
+    If use_embedding=False, sim_fn is (specA,specB)->(score,matched).
+    If None => default CosineGreedy(tol=0.1).
+    If use_embedding=True, sim_fn is (embA,embB)->float or None => dreams_embedding_similarity.
+    """
+
+    scores = []
+    queue = deque([tree.root])
+    while queue:
+        parent = queue.popleft()
+        for child in parent.children.values():
+            if not use_embedding:
+                specA = get_spectrum(parent)
+                specB = get_spectrum(child)
+                if sim_fn is None:
+                    (sc, _) = compute_cosine_greedy_score(specA, specB, tolerance=tolerance)
+                else:
+                    (sc, _) = sim_fn(specA, specB)
+                scores.append(sc)
+            else:
+                embA = get_embedding_for_node(parent, embeddings_dict)
+                embB = get_embedding_for_node(child, embeddings_dict)
+                if sim_fn is None:
+                    sc = dreams_embedding_similarity(embA, embB)
+                else:
+                    sc = sim_fn(embA, embB)
+                scores.append(sc)
+            queue.append(child)
+    return scores
+
+def compute_sibling_similarity(tree,
+                               use_embedding: bool=False,
+                               sim_fn=None,
+                               embeddings_dict: Optional[Dict[str, np.ndarray]]=None,
+                               tolerance: float=0.1) -> List[float]:
+    """
+    For each parent, compute pairwise similarity among sibling nodes.
+    Return a list of the resulting scores.
+    """
+
+    scores = []
+    queue = deque([tree.root])
+    while queue:
+        parent = queue.popleft()
+        siblings = list(parent.children.values())
+        for i in range(len(siblings)):
+            for j in range(i+1, len(siblings)):
+                nodeA = siblings[i]
+                nodeB = siblings[j]
+                if not use_embedding:
+                    specA = get_spectrum(nodeA)
+                    specB = get_spectrum(nodeB)
+                    if sim_fn is None:
+                        (sc, _) = compute_cosine_greedy_score(specA, specB, tolerance=tolerance)
+                    else:
+                        (sc, _) = sim_fn(specA, specB)
+                    scores.append(sc)
+                else:
+                    embA = get_embedding_for_node(nodeA, embeddings_dict)
+                    embB = get_embedding_for_node(nodeB, embeddings_dict)
+                    if sim_fn is None:
+                        sc = dreams_embedding_similarity(embA, embB)
+                    else:
+                        sc = sim_fn(embA, embB)
+                    scores.append(sc)
+
+        for child in siblings:
+            queue.append(child)
+
+    return scores
+
+def random_node_pairs(
+    msn_dataset,
+    num_pairs: int=1000,
+    use_embedding: bool=False,
+    sim_fn=None,
+    embeddings_dict: Optional[Dict[str, np.ndarray]]=None,
+    tolerance: float=0.1
+) -> List[float]:
+    """
+    Gather all nodes from all trees, sample random pairs, compute similarity.
+    Return list of scores.
+    """
+    from collections import deque
+    all_nodes = []
+    for tree in msn_dataset.trees:
+        queue = deque([tree.root])
+        while queue:
+            n = queue.popleft()
+            all_nodes.append(n)
+            for c in n.children.values():
+                queue.append(c)
+
+    if len(all_nodes) < 2:
+        return []
+
+    scores = []
+    for _ in range(num_pairs):
+        A = random.choice(all_nodes)
+        B = random.choice(all_nodes)
+        if A is B:
+            continue
+
+        if not use_embedding:
+            specA = get_spectrum(A)
+            specB = get_spectrum(B)
+            if sim_fn is None:
+                (sc, _) = compute_cosine_greedy_score(specA, specB, tolerance=tolerance)
+            else:
+                (sc, _) = sim_fn(specA, specB)
+            scores.append(sc)
+        else:
+            embA = get_embedding_for_node(A, embeddings_dict)
+            embB = get_embedding_for_node(B, embeddings_dict)
+            if sim_fn is None:
+                sc = dreams_embedding_similarity(embA, embB)
+            else:
+                sc = sim_fn(embA, embB)
+            scores.append(sc)
+
+    return scores
+
+def compute_pairwise_similarity_by_mslevel(
+    tree,
+    use_embedding: bool=False,
+    sim_fn=None,
+    embeddings_dict: Optional[Dict[str, np.ndarray]]=None,
+    tolerance: float=0.1
+) -> Dict[Tuple[int,int], List[float]]:
+    """
+    For *all* pairs of distinct nodes in the tree, compute similarity,
+    group by (msLevelA, msLevelB). That includes same-level pairs
+    (like (2,2)) if there exist multiple ms2 nodes in the tree.
+
+    Return: dict of (lvlA, lvlB)->list of similarity scores.
+    """
+    from itertools import product
+
+    # BFS gather nodes
+    nodes = []
+    queue = deque([tree.root])
+    while queue:
+        n = queue.popleft()
+        nodes.append(n)
+        for c in n.children.values():
+            queue.append(c)
+
+    level_sims = defaultdict(list)
+
+    def _node_sim(nA, nB):
+        if not use_embedding:
+            sA = get_spectrum(nA)
+            sB = get_spectrum(nB)
+            if sim_fn is None:
+                (sc, _) = compute_cosine_greedy_score(sA, sB, tolerance=tolerance)
+            else:
+                (sc, _) = sim_fn(sA, sB)
+            return sc
+        else:
+            eA = get_embedding_for_node(nA, embeddings_dict)
+            eB = get_embedding_for_node(nB, embeddings_dict)
+            if sim_fn is None:
+                return dreams_embedding_similarity(eA, eB)
+            else:
+                return sim_fn(eA, eB)
+
+    num_nodes = len(nodes)
+    for i in range(num_nodes):
+        for j in range(i+1, num_nodes):
+            nA = nodes[i]
+            nB = nodes[j]
+            msA = get_ms_level(nA)
+            msB = get_ms_level(nB)
+            if msA is None or msB is None:
+                continue
+            sc = _node_sim(nA, nB)
+            level_sims[(msA, msB)].append(sc)
+
+    return dict(level_sims)
+
+def compute_same_level_similarity_limited(
+    msn_dataset,
+    target_level: int = 2,
+    use_embedding: bool = False,
+    sim_fn=None,
+    embeddings_dict: Optional[Dict[str, np.ndarray]] = None,
+    tolerance: float = 0.1,
+    max_pairs: int = 5000
+) -> List[float]:
+    """
+    Collect *all* nodes from ALL trees with ms_level == target_level,
+    then compute pairwise similarity among them (excluding node with itself).
+
+    If the number of total pairs is small enough (< max_pairs), do them all.
+    Otherwise, randomly sample up to max_pairs pairs.
+
+    If use_embedding=False, we interpret sim_fn as (specA, specB)->(score, matched_peaks).
+      If sim_fn is None => default CosineGreedy(tol=0.1).
+    If use_embedding=True, we interpret sim_fn as (embA, embB)->float.
+      If sim_fn is None => default dreams_embedding_similarity.
+
+    Returns
+    -------
+    List of similarity scores (float).
+    """
+
+    # 1) Gather nodes at target_level
+    nodes_at_level = []
+    for tree in msn_dataset.trees:
+        queue = deque([tree.root])
+        while queue:
+            node = queue.popleft()
+            if node.spectrum is not None:
+                lvl_str = node.spectrum.get("ms_level", None)
+                if lvl_str is not None and int(lvl_str) == target_level:
+                    nodes_at_level.append(node)
+            for child in node.children.values():
+                queue.append(child)
+
+    n = len(nodes_at_level)
+    if n < 2:
+        return []
+
+    # total number of pairs
+    total_pairs = comb(n, 2)  # n*(n-1)//2
+
+    # Decide if we do all pairs or random sampling
+    if total_pairs <= max_pairs:
+        pairs = []
+        for i in range(n):
+            for j in range(i+1, n):
+                pairs.append((nodes_at_level[i], nodes_at_level[j]))
+    else:
+        pairs = []
+        seen = set()
+        attempts = 0
+        while len(pairs) < max_pairs and attempts < max_pairs*10:
+            i = random.randint(0, n-1)
+            j = random.randint(0, n-1)
+            if i < j:
+                if (i,j) not in seen:
+                    seen.add((i,j))
+                    pairs.append((nodes_at_level[i], nodes_at_level[j]))
+            elif j < i:
+                if (j,i) not in seen:
+                    seen.add((j,i))
+                    pairs.append((nodes_at_level[j], nodes_at_level[i]))
+            attempts += 1
+
+    # For each pair, compute similarity
+    sims = []
+    for (nodeA, nodeB) in pairs:
+        if not use_embedding:
+            specA = get_spectrum(nodeA)
+            specB = get_spectrum(nodeB)
+            if sim_fn is None:
+                (score, _) = compute_cosine_greedy_score(specA, specB, tolerance=tolerance)
+            else:
+                (score, _) = sim_fn(specA, specB)
+            sims.append(score)
+        else:
+            embA = get_embedding_for_node(nodeA, embeddings_dict)
+            embB = get_embedding_for_node(nodeB, embeddings_dict)
+            if sim_fn is None:
+                sc = dreams_embedding_similarity(embA, embB)
+            else:
+                sc = sim_fn(embA, embB)
+            sims.append(sc)
+
+    return sims
