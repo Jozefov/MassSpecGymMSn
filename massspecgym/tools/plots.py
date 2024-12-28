@@ -6,6 +6,8 @@ from collections import defaultdict, deque
 from rdkit import Chem
 from rdkit.Chem import DataStructs, AllChem
 import seaborn as sns
+from typing import List, Dict, Tuple, Optional
+import numpy as np
 
 
 
@@ -209,3 +211,64 @@ def evaluate_split(df_split, train_fold='train', val_fold='val', smiles_col='smi
     plt.show()
 
     return max_tanimotos
+
+def plot_histograms(
+    distributions: Dict[str, List[float]],
+    bins: int = 50,
+    alpha: float = 0.5,
+    title: str = "Histogram of Similarities",
+    xlabel: str = "Similarity",
+    ylabel: str = "# of pairs"
+):
+    """
+    distributions: { "label": [scores], ... }
+    Plot each distribution as a separate histogram in one figure.
+    """
+    plt.figure(figsize=(6,4))
+    for label, scores in distributions.items():
+        arr = np.array(scores)
+        arr = arr[~np.isnan(arr)]
+        plt.hist(arr, bins=bins, alpha=alpha, label=label)
+    plt.xlabel(xlabel)
+    plt.ylabel(ylabel)
+    plt.legend()
+    plt.title(title)
+    plt.show()
+
+def plot_histograms_by_level_pairs(level_sims_dict: Dict[Tuple[int,int], List[float]],
+                                   mode: str = "Greedy"):
+    """
+    For each (msLevelA, msLevelB) in level_sims_dict, create a separate histogram plot.
+    Each key is (lvlA, lvlB) -> list of similarity scores.
+    mode indicates the type of Cosine (Greedy or Hungarian) or "Embeddings" for labeling.
+    """
+
+    def summarize_similarity_distribution(scores: List[float]) -> dict:
+        """
+        Return mean, std, median, count for a list of float scores,
+        ignoring NaNs.
+        """
+        arr = np.array(scores)
+        arr = arr[~np.isnan(arr)]
+        if len(arr) == 0:
+            return {"mean": np.nan, "std": np.nan, "median": np.nan, "count": 0}
+        return {
+            "mean": float(np.mean(arr)),
+            "std": float(np.std(arr)),
+            "median": float(np.median(arr)),
+            "count": len(arr)
+        }
+
+    for (lvlA, lvlB), simvals in level_sims_dict.items():
+        arr = np.array(simvals)
+        arr = arr[~np.isnan(arr)]
+        stats_lv = summarize_similarity_distribution(arr)
+
+        plt.figure(figsize=(6,4))
+        plt.hist(arr, bins=50, alpha=0.7, label=f"LvlPair: ({lvlA},{lvlB})")
+        plt.xlabel(f"{mode} Similarity")
+        plt.ylabel("# of pairs")
+        plt.title(f"Histogram of {mode} Similarities for level pair ({lvlA},{lvlB})\n"
+                  f"mean={stats_lv['mean']:.3f}, median={stats_lv['median']:.3f}, count={stats_lv['count']}")
+        plt.legend()
+        plt.show()
