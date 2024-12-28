@@ -1,5 +1,6 @@
 from collections import defaultdict, deque
 import typing as T
+from typing import List
 import numpy as np
 import json
 from rdkit import Chem
@@ -7,6 +8,7 @@ import pandas as pd
 from collections import defaultdict, Counter
 from massspecgym.data.datasets import MSnDataset
 import heapq
+from scipy import stats
 from matchms.importing import load_from_mgf
 
 def find_max_deviation(deviations: T.List[T.Tuple[str, float, float, float]]) -> T.Optional[T.Dict]:
@@ -674,5 +676,30 @@ def compare_canonical_smiles(mgf_path: str, json_path: str) -> None:
         print("No differing canonical SMILES found between PubChem and RDKit.\n")
 
     print("=== Comparison Complete ===")
+
+
+def compare_distributions(distA: List[float], distB: List[float], test_type: str = "ttest") -> float:
+    """
+    Compare two distributions (lists of floats) with a chosen test, e.g. 'ttest' or 'ranksum'.
+    Return the p-value.
+
+    - "ttest": a standard two-sample t-test
+    - "ranksum": a nonparametric Wilcoxon rank-sum test
+    """
+    arrA = np.array(distA)
+    arrB = np.array(distB)
+    arrA = arrA[~np.isnan(arrA)]
+    arrB = arrB[~np.isnan(arrB)]
+    if len(arrA) < 2 or len(arrB) < 2:
+        return float('nan')
+
+    if test_type.lower() == "ttest":
+        _, pval = stats.ttest_ind(arrA, arrB, equal_var=False, nan_policy='omit')
+        return pval
+    elif test_type.lower() == "ranksum":
+        _, pval = stats.ranksums(arrA, arrB)
+        return pval
+    else:
+        raise ValueError(f"Unknown test_type: {test_type}")
 
 
