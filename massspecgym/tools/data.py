@@ -493,64 +493,6 @@ def random_node_pairs(
 
     return scores
 
-# def compute_pairwise_similarity_by_mslevel(
-#     tree,
-#     use_embedding: bool=False,
-#     sim_fn=None,
-#     embeddings_dict: Optional[Dict[str, np.ndarray]]=None,
-#     tolerance: float=0.1
-# ) -> Dict[Tuple[int,int], List[float]]:
-#     """
-#     For *all* pairs of distinct nodes in the tree, compute similarity,
-#     group by (msLevelA, msLevelB). That includes same-level pairs
-#     (like (2,2)) if there exist multiple ms2 nodes in the tree.
-#
-#     Return: dict of (lvlA, lvlB)->list of similarity scores.
-#     """
-#     from itertools import product
-#
-#     # BFS gather nodes
-#     nodes = []
-#     queue = deque([tree.root])
-#     while queue:
-#         n = queue.popleft()
-#         nodes.append(n)
-#         for c in n.children.values():
-#             queue.append(c)
-#
-#     level_sims = defaultdict(list)
-#
-#     def _node_sim(nA, nB):
-#         if not use_embedding:
-#             sA = get_spectrum(nA)
-#             sB = get_spectrum(nB)
-#             if sim_fn is None:
-#                 (sc, _) = compute_cosine_greedy_score(sA, sB, tolerance=tolerance)
-#             else:
-#                 (sc, _) = sim_fn(sA, sB)
-#             return sc
-#         else:
-#             eA = get_embedding_for_node(nA, embeddings_dict)
-#             eB = get_embedding_for_node(nB, embeddings_dict)
-#             if sim_fn is None:
-#                 return dreams_embedding_similarity(eA, eB)
-#             else:
-#                 return sim_fn(eA, eB)
-#
-#     num_nodes = len(nodes)
-#     for i in range(num_nodes):
-#         for j in range(i+1, num_nodes):
-#             nA = nodes[i]
-#             nB = nodes[j]
-#             msA = get_ms_level(nA)
-#             msB = get_ms_level(nB)
-#             if msA is None or msB is None:
-#                 continue
-#             sc = _node_sim(nA, nB)
-#             level_sims[(msA, msB)].append(sc)
-#
-#     return dict(level_sims)
-
 def compute_pairwise_similarity_by_mslevel(
     tree,
     use_embedding: bool = False,
