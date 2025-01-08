@@ -100,13 +100,11 @@ class MassSpecDataModule(pl.LightningDataModule):
             if stage == "fit" or stage is None:
                 self.train_dataset = Subset(self.dataset, np.where(split_mask == "train")[0])
                 self.val_dataset = Subset(self.dataset, np.where(split_mask == "val")[0])
+                print(f"Train dataset size: {len(self.train_dataset)}")
+                print(f"Val dataset size: {len(self.val_dataset)}")
             if stage == "test":
                 self.test_dataset = Subset(self.dataset, np.where(split_mask == "test")[0])
-
-        print(f"Train dataset size: {len(self.train_dataset)}")
-        print(f"Val dataset size: {len(self.val_dataset)}")
-        # if self.test_dataset:
-        #     print(f"Test dataset size: {len(self.test_dataset)}")
+                print(f"Test dataset size: {len(self.test_dataset)}")
 
     def _get_dataloader(self, dataset, shuffle=False):
         """
