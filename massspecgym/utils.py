@@ -413,7 +413,11 @@ class MyopicMCES:
         self.threshold = threshold
         self.always_stronger_bound = always_stronger_bound
         if solver_options is None:
-            solver_options = dict(msg=0)  # make ILP solver silent
+            # Suppress solver messages and redirect logs to null device
+            solver_options = {
+                'msg': False,
+                'logPath': os.devnull
+            }
         self.solver_options = solver_options
 
     def __call__(self, smiles_1: str, smiles_2: str) -> float:
