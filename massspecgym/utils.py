@@ -351,52 +351,52 @@ def show_mols(mols, legends='new_indices', smiles_in=False, svg=False, sort_by_l
 
     return img
 
-class MyopicMCESNew:
-    """
-    A new version of MyopicMCES class designed to handle the updated MCES function parameters.
-    """
-    def __init__(
-        self,
-        ind: int = 0,  # Index for parallel processing
-        solver: str = 'PULP_CBC_CMD',  # Default solver to use
-        threshold: int = 15,  # MCES threshold for distance calculations
-        always_stronger_bound: bool = True,  # Use the second stronger bound by default
-        no_ilp_threshold: bool = False,  # Option to always return the exact distance, ignoring the threshold
-        solver_options: dict = None,  # Additional solver options
-        catch_errors: bool = False  # Option to catch errors during MCES computation
-    ):
-        self.ind = ind
-        self.solver = solver
-        self.threshold = threshold
-        self.always_stronger_bound = always_stronger_bound
-        self.no_ilp_threshold = no_ilp_threshold
-        self.catch_errors = catch_errors
-        if solver_options is None:
-            solver_options = {'msg': 0}  # Make ILP solver silent
-        self.solver_options = solver_options
-
-    def __call__(self, smiles_1: str, smiles_2: str) -> float:
-        try:
-            retval = MCES(
-                smiles1=smiles_1,  # Correct parameter name
-                smiles2=smiles_2,  # Correct parameter name
-                threshold=self.threshold,
-                i=self.ind,
-                solver=self.solver,
-                solver_options=self.solver_options,
-                no_ilp_threshold=self.no_ilp_threshold,
-                always_stronger_bound=self.always_stronger_bound,
-                catch_errors=self.catch_errors
-            )
-            # Extract the relevant output (distance)
-            dist = retval[1]
-            return dist
-        except Exception as e:
-            if self.catch_errors:
-                print(f"Error calculating MCES for SMILES {smiles_1} and {smiles_2}: {e}")
-                return float('inf')  # Return a high distance on error if catching errors
-            else:
-                raise e  # Reraise the error if not catching
+# class MyopicMCESNew:
+#     """
+#     A new version of MyopicMCES class designed to handle the updated MCES function parameters.
+#     """
+#     def __init__(
+#         self,
+#         ind: int = 0,  # Index for parallel processing
+#         solver: str = 'PULP_CBC_CMD',  # Default solver to use
+#         threshold: int = 15,  # MCES threshold for distance calculations
+#         always_stronger_bound: bool = True,  # Use the second stronger bound by default
+#         no_ilp_threshold: bool = False,  # Option to always return the exact distance, ignoring the threshold
+#         solver_options: dict = None,  # Additional solver options
+#         catch_errors: bool = False  # Option to catch errors during MCES computation
+#     ):
+#         self.ind = ind
+#         self.solver = solver
+#         self.threshold = threshold
+#         self.always_stronger_bound = always_stronger_bound
+#         self.no_ilp_threshold = no_ilp_threshold
+#         self.catch_errors = catch_errors
+#         if solver_options is None:
+#             solver_options = {'msg': 0}  # Make ILP solver silent
+#         self.solver_options = solver_options
+#
+#     def __call__(self, smiles_1: str, smiles_2: str) -> float:
+#         try:
+#             retval = MCES(
+#                 smiles1=smiles_1,  # Correct parameter name
+#                 smiles2=smiles_2,  # Correct parameter name
+#                 threshold=self.threshold,
+#                 i=self.ind,
+#                 solver=self.solver,
+#                 solver_options=self.solver_options,
+#                 no_ilp_threshold=self.no_ilp_threshold,
+#                 always_stronger_bound=self.always_stronger_bound,
+#                 catch_errors=self.catch_errors
+#             )
+#             # Extract the relevant output (distance)
+#             dist = retval[1]
+#             return dist
+#         except Exception as e:
+#             if self.catch_errors:
+#                 print(f"Error calculating MCES for SMILES {smiles_1} and {smiles_2}: {e}")
+#                 return float('inf')  # Return a high distance on error if catching errors
+#             else:
+#                 raise e  # Reraise the error if not catching
 
 
 class MyopicMCES:
@@ -418,13 +418,13 @@ class MyopicMCES:
 
     def __call__(self, smiles_1: str, smiles_2: str) -> float:
         retval = MCES(
-            s1=smiles_1,
-            s2=smiles_2,
-            ind=self.ind,
+            smiles1=smiles_1,
+            smiles2=smiles_2,
+            i=self.ind,
+            solver=self.solver,
+            solver_options=self.solver_options,
             threshold=self.threshold,
             always_stronger_bound=self.always_stronger_bound,
-            solver=self.solver,
-            solver_options=self.solver_options
         )
         dist = retval[1]
         return dist
