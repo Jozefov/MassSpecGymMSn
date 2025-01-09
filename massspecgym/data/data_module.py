@@ -92,8 +92,11 @@ class MassSpecDataModule(pl.LightningDataModule):
             if stage == "fit" or stage is None:
                 self.train_dataset = Subset(self.dataset, fold_indices['train'])
                 self.val_dataset = Subset(self.dataset, fold_indices['val'])
+                print(f"Train dataset size: {len(self.train_dataset)}")
+                print(f"Val dataset size: {len(self.val_dataset)}")
             if stage == "test":
                 self.test_dataset = Subset(self.dataset, fold_indices['test'])
+                print(f"Test dataset size: {len(self.test_dataset)}")
         else:
 
             split_mask = self.split.loc[self.dataset.metadata["identifier"]].values
