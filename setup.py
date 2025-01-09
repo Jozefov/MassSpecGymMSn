@@ -26,6 +26,7 @@ setup(
         "torchmetrics",
         "torch_geometric",
         "tokenizers",
+        "selfies",
         "numpy",
         "rdkit",
         "myopic-mces",
