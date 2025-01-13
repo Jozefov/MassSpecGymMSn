@@ -11,7 +11,7 @@ import random
 from matchms import Spectrum
 from rdkit import Chem
 import typing as T
-from typing import List, Dict, Tuple, Optional
+from typing import List, Dict, Tuple, Optional, Union
 from massspecgym import utils
 
 from massspecgym.tools.murcko_hist import are_sub_hists, murcko_hist
@@ -633,8 +633,12 @@ def compute_same_level_similarity_limited(
     sim_fn=None,
     embeddings_dict: Optional[Dict[str, np.ndarray]] = None,
     tolerance: float = 0.1,
-    max_pairs: int = 5000
-) -> List[float]:
+    max_pairs: int = 5000,
+    compute_all_metrics: bool = False
+) -> Union[
+    Tuple[List[float], List[Tuple[Optional[str], Optional[str]]]],
+    Tuple[List[float], List[float], List[Tuple[Optional[str], Optional[str]]]]
+]:
     """
     Collect *all* nodes from ALL trees with ms_level == target_level,
     then compute pairwise similarity among them (excluding node with itself).
@@ -647,9 +651,31 @@ def compute_same_level_similarity_limited(
     If use_embedding=True, we interpret sim_fn as (embA, embB)->float.
       If sim_fn is None => default dreams_embedding_similarity.
 
-    Returns
-    -------
-    List of similarity scores (float).
+    If compute_all_metrics=True, compute both cosine similarity on spectra and embeddings
+    for each pair. Requires sim_fn and embeddings_dict to be provided.
+
+    Additionally, for each computed similarity, retrieve the corresponding SMILES pairs.
+
+    Parameters:
+        msn_dataset: The dataset containing trees of nodes with spectra and embeddings.
+        target_level (int): The specific depth level in the tree to collect nodes from.
+        use_embedding (bool): Whether to compute similarity based on embeddings or spectra.
+        sim_fn: The similarity function to use. If None, defaults are applied based on use_embedding.
+        embeddings_dict (Optional[Dict[str, np.ndarray]]): Dictionary mapping identifiers to embeddings.
+        tolerance (float): Tolerance parameter for the default CosineGreedy similarity function.
+        max_pairs (int): Maximum number of similarity pairs to compute.
+        compute_all_metrics (bool): Whether to compute both cosine similarities on spectra and embeddings.
+
+    Returns:
+        - If compute_all_metrics=False:
+            Tuple[List[float], List[Tuple[Optional[str], Optional[str]]]]:
+                - List of similarity scores.
+                - List of tuples containing SMILES pairs corresponding to each similarity score.
+        - If compute_all_metrics=True:
+            Tuple[List[float], List[float], List[Tuple[Optional[str], Optional[str]]]]:
+                - List of cosine similarity scores based on spectra.
+                - List of cosine similarity scores based on embeddings.
+                - List of tuples containing SMILES pairs corresponding to each similarity score.
     """
 
     # 1) Gather nodes at target_level
@@ -667,7 +693,10 @@ def compute_same_level_similarity_limited(
 
     n = len(nodes_at_level)
     if n < 2:
-        return []
+        if compute_all_metrics:
+            return [], [], []
+        else:
+            return [], []
 
     # total number of pairs
     total_pairs = comb(n, 2)  # n*(n-1)//2
@@ -682,37 +711,83 @@ def compute_same_level_similarity_limited(
         pairs = []
         seen = set()
         attempts = 0
-        while len(pairs) < max_pairs and attempts < max_pairs*10:
-            i = random.randint(0, n-1)
-            j = random.randint(0, n-1)
-            if i < j:
-                if (i,j) not in seen:
-                    seen.add((i,j))
-                    pairs.append((nodes_at_level[i], nodes_at_level[j]))
-            elif j < i:
-                if (j,i) not in seen:
-                    seen.add((j,i))
-                    pairs.append((nodes_at_level[j], nodes_at_level[i]))
+        while len(pairs) < max_pairs and attempts < max_pairs * 10:
+            i = random.randint(0, n - 1)
+            j = random.randint(0, n - 1)
+            if i != j:
+                sorted_pair = tuple(sorted((i, j)))
+                if sorted_pair not in seen:
+                    seen.add(sorted_pair)
+                    pairs.append((nodes_at_level[sorted_pair[0]], nodes_at_level[sorted_pair[1]]))
             attempts += 1
 
-    # For each pair, compute similarity
-    sims = []
+    # Initialize lists to store similarity scores and SMILES pairs
+    sims_spectra = []  # For cosine similarity based on spectra
+    sims_embeddings = []  # For cosine similarity based on embeddings
+    smiles_pairs = []
+
+    # For each pair, compute similarity and retrieve SMILES
     for (nodeA, nodeB) in pairs:
-        if not use_embedding:
+        # Initialize similarity scores for this pair
+        score_spectra = float('nan')
+        score_embeddings = float('nan')
+
+        # Compute cosine similarity on spectra if required
+        if not compute_all_metrics:
+            if not use_embedding:
+                specA = get_spectrum(nodeA)
+                specB = get_spectrum(nodeB)
+                if specA is not None and specB is not None:
+                    if sim_fn is None:
+                        (score, _) = compute_cosine_greedy_score(specA, specB, tolerance=tolerance)
+                    else:
+                        (score, _) = sim_fn(specA, specB)
+                    score_spectra = score
+            else:
+                embA = get_embedding_for_node(nodeA, embeddings_dict)
+                embB = get_embedding_for_node(nodeB, embeddings_dict)
+                if embA is not None and embB is not None:
+                        score_embeddings = dreams_embedding_similarity(embA, embB)
+        else:
+            # Compute both similarities
+            # 1. Cosine similarity on spectra
             specA = get_spectrum(nodeA)
             specB = get_spectrum(nodeB)
-            if sim_fn is None:
-                (score, _) = compute_cosine_greedy_score(specA, specB, tolerance=tolerance)
-            else:
-                (score, _) = sim_fn(specA, specB)
-            sims.append(score)
-        else:
-            embA = get_embedding_for_node(nodeA, embeddings_dict)
-            embB = get_embedding_for_node(nodeB, embeddings_dict)
-            if sim_fn is None:
-                sc = dreams_embedding_similarity(embA, embB)
-            else:
-                sc = sim_fn(embA, embB)
-            sims.append(sc)
+            if specA is not None and specB is not None:
+                if sim_fn is None:
+                    (score, _) = compute_cosine_greedy_score(specA, specB, tolerance=tolerance)
+                else:
+                    (score, _) = sim_fn(specA, specB)
+                score_spectra = score
 
-    return sims
+            # 2. Cosine similarity on embeddings
+            if embeddings_dict is not None:
+                embA = get_embedding_for_node(nodeA, embeddings_dict)
+                embB = get_embedding_for_node(nodeB, embeddings_dict)
+                if embA is not None and embB is not None:
+                    score_embeddings = dreams_embedding_similarity(embA, embB)
+
+
+        # Append the computed similarity scores
+        if compute_all_metrics:
+            sims_spectra.append(float(score_spectra))
+            sims_embeddings.append(float(score_embeddings))
+        else:
+            if not use_embedding:
+                sims_spectra.append(float(score_spectra))
+            else:
+                sims_embeddings.append(float(score_embeddings))
+
+        # Retrieve SMILES from both nodes
+        smilesA = nodeA.spectrum.get('smiles', None)
+        smilesB = nodeB.spectrum.get('smiles', None)
+        smiles_pairs.append((smilesA, smilesB))
+
+    # Return based on compute_all_metrics
+    if compute_all_metrics:
+        return sims_spectra, sims_embeddings, smiles_pairs
+    else:
+        if not use_embedding:
+            return sims_spectra, smiles_pairs
+        else:
+            return sims_embeddings, smiles_pairs
