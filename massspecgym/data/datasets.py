@@ -11,7 +11,7 @@ from numpy.f2py.auxfuncs import throw_error
 import massspecgym.utils as utils
 from pathlib import Path
 from rdkit import Chem
-from typing import Optional, List, Tuple
+from typing import Optional, Union, Dict, List, Tuple
 from torch.utils.data.dataset import Dataset
 from torch.utils.data.dataloader import default_collate
 from torch_geometric.data import Data, Batch
@@ -460,6 +460,33 @@ class Tree:
         """
         self.root.prune_missing_spectra()
 
+    def cut_at_level(self, level: int):
+        """
+        Cuts the tree at the specified level.
+
+        Args:
+            level (int): The maximum depth to keep in the tree.
+                         Level 0 corresponds to the root node.
+        """
+        if level < 0:
+            raise ValueError("cut_tree_at_level must be non-negative")
+        self._cut_node_at_level(self.root, current_level=0, max_level=level)
+
+    def _cut_node_at_level(self, node: TreeNode, current_level: int, max_level: int):
+        """
+        Recursively cuts the tree at the specified level.
+
+        Args:
+            node (TreeNode): The current node being processed.
+            current_level (int): The current depth in the tree.
+            max_level (int): The maximum depth to retain.
+        """
+        if current_level >= max_level:
+            node.children = {}
+        else:
+            for child in node.children.values():
+                self._cut_node_at_level(child, current_level + 1, max_level)
+
     def to_pyg_data(self, featurizer: Optional[SpectrumFeaturizer] = None, hierarchical_tree: bool = True):
 
         if featurizer is None:
@@ -541,8 +568,18 @@ class Tree:
 
 
 class MSnDataset(MassSpecDataset):
-    def __init__(self, pth=None, dtype=torch.float32, mol_transform=None, featurizer=None,
-                 max_allowed_deviation: float = 0.005, prune_missing_spectra=True, hierarchical_tree=True, return_mol_freq=True):
+    def __init__(
+        self,
+        pth: Optional[Path] = None,
+        dtype: torch.dtype = torch.float32,
+        mol_transform: T.Optional[T.Union[MolTransform, T.Dict[str, MolTransform]]] = None,
+        featurizer: Optional[SpectrumFeaturizer] = None,
+        max_allowed_deviation: float = 0.005,
+        prune_missing_spectra: bool = True,
+        hierarchical_tree: bool = True,
+        return_mol_freq: bool = True,
+        cut_tree_at_level: Optional[int] = None  # New parameter
+    ):
         # load dataset using the parent class
         super().__init__(pth=pth, return_mol_freq=False)
 
@@ -552,6 +589,7 @@ class MSnDataset(MassSpecDataset):
         self.metadata = self.metadata[self.metadata["spectype"] == "ALL_ENERGIES"]
         self.featurizer = featurizer
         self.return_mol_freq = return_mol_freq
+        self.cut_tree_at_level = cut_tree_at_level
 
 
         # Assume the metadata includes 'inchi_aux' column
@@ -559,16 +597,18 @@ class MSnDataset(MassSpecDataset):
             self.metadata = compute_root_mol_freq(self.metadata, "inchi_aux")
 
         # Map identifier to spectra
-        # Create mappings from 'IDENTIFIER' to spectra and spectra indices
         self.identifier_to_spectrum = {spectrum.get('identifier'): spectrum for spectrum in self.spectra}
 
         # get paths from the metadata
         self.all_tree_paths = self._parse_paths_from_df(self.metadata)
 
-        # Generate trees from paths and their corresponding SMILES
-        self.trees, self.pyg_trees, self.smiles = self._generate_trees(self.all_tree_paths,
-                                                                       prune_missing_spectra=prune_missing_spectra,
-                                                                       hierarchical_tree=hierarchical_tree)
+        # Generate trees from paths and their corresponding SMILES, applying tree cutting
+        self.trees, self.pyg_trees, self.smiles = self._generate_trees(
+            self.all_tree_paths,
+            prune_missing_spectra=prune_missing_spectra,
+            hierarchical_tree=hierarchical_tree,
+            cut_tree_at_level=self.cut_tree_at_level
+        )
         # TODO PYG trees
 
         # split trees to folds
@@ -721,9 +761,27 @@ class MSnDataset(MassSpecDataset):
             all_deviations.extend(tree.deviations)
         return all_deviations
 
-    def _generate_trees(self, dataset_all_tree_paths: List[Tuple[str, float, List[Tuple[List[float], matchms.Spectrum]], matchms.Spectrum]],
-                        prune_missing_spectra: bool = False, hierarchical_tree: bool = True) \
-            -> Tuple[List['Tree'], List['Data'], List[str]]:
+    def _generate_trees(self,
+                        dataset_all_tree_paths: List[
+                            Tuple[str, float, List[Tuple[List[float], matchms.Spectrum]], matchms.Spectrum]],
+                        prune_missing_spectra: bool = False,
+                        hierarchical_tree: bool = True,
+                        cut_tree_at_level: Optional[int] = None
+                        ) -> Tuple[List['Tree'], List['Data'], List[str]]:
+        """
+        Generates Tree and PyG Data objects from the dataset paths.
+
+        Args:
+            dataset_all_tree_paths (List[Tuple[str, float, List[Tuple[List[float], matchms.Spectrum]], matchms.Spectrum]]):
+                List containing tuples of (SMILES, precursor_mz, paths, root_spectrum).
+            prune_missing_spectra (bool): Whether to prune trees with missing spectra.
+            hierarchical_tree (bool): Whether to maintain hierarchical edges or do bidirectional.
+            cut_tree_at_level (Optional[int]): Maximum depth to retain in each tree.
+
+        Returns:
+            Tuple containing lists of Tree objects, PyG Data objects, and SMILES strings.
+        """
+
         trees = []
         smiles = []
         pyg_trees = []
@@ -737,6 +795,10 @@ class MSnDataset(MassSpecDataset):
 
             if prune_missing_spectra:
                 tree.prune_missing_spectra()
+
+            # Apply tree cutting if specified
+            if cut_tree_at_level is not None:
+                tree.cut_at_level(cut_tree_at_level)
 
             pyg_tree = tree.to_pyg_data(self.featurizer, hierarchical_tree)
             pyg_trees.append(pyg_tree)
