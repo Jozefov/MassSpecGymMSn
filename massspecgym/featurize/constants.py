@@ -35,7 +35,6 @@ OTHER_FEATURES = {
     'atom_counts': '_featurize_atom_counts',
     'binned_peaks': '_featurize_binned_peaks',
     'spectrum_embedding': '_featurize_spectrum_embedding',
-    'spectral_data': '_featurize_spectral_data',
 }
 
 FEATURE_METHODS = {**CONTINUOUS_FEATURES, **CATEGORICAL_FEATURES, **OTHER_FEATURES}
