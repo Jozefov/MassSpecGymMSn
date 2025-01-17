@@ -958,7 +958,6 @@ class MSnRetrievalDataset(MSnDataset):
         """
         Custom collate function to handle batches of spec, mol, candidates, and labels.
         """
-        print("in collate_fn")
         # Initialize the collated batch
         collated_batch = {}
 
