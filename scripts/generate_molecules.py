@@ -106,13 +106,14 @@ def get_candidates_parallel(
     cand_type: str = 'formula',
     max_cands: int = 256,
     df_candidates: T.Optional[pd.DataFrame] = None,
-    max_workers: int = cpu_count() - 2
+    max_workers: int = cpu_count() - 2,
+    desc: str = "Processing"
 ) -> pd.DataFrame:
     """
     For each SMILES in `query_smiles`, find similar SMILES in the dataframe `df`
     in parallel, either by formula or mass.
     """
-    logging.info('Starting get_candidates_parallel')
+    logging.info(f'Starting get_candidates_parallel [{desc}]')
 
     # If no DataFrame (df_candidates) was provided to fill, create a new one
     if df_candidates is None:
@@ -131,7 +132,7 @@ def get_candidates_parallel(
     shared_mass = Array(ctypes.c_double, df_mass_array, lock=False)
     shared_inchi_key_2D = Array(ctypes.c_wchar_p, df_inchi_key_2d_array, lock=False)
 
-    logging.info(f'Setting up shared arrays with {max_workers} workers')
+    logging.info(f'Setting up shared arrays with {max_workers} workers for [{desc}]')
 
     with Pool(
         processes=max_workers,
@@ -145,14 +146,17 @@ def get_candidates_parallel(
         ]
 
         results = []
-        for result in tqdm(pool.imap(get_candidates_single, args), total=len(args)):
+        # Provide a custom 'desc' to the tqdm progress bar:
+        for result in tqdm(pool.imap(get_candidates_single, args),
+                           total=len(args),
+                           desc=desc):
             results.append(result)
 
         # Store results in the 'cands' column
         df_candidates['cands'] = results
 
-    logging.info('Finished multiprocessing pool')
-    logging.info('Completed get_candidates_parallel')
+    logging.info(f'Finished multiprocessing pool [{desc}]')
+    logging.info(f'Completed get_candidates_parallel [{desc}]')
     return df_candidates
 
 def main():
@@ -183,12 +187,14 @@ def main():
     # Run candidate retrieval in stages
 
     # 1) First with the 1M dataset
+    logging.info("Starting retrieval with the 1M dataset")
     candidates = get_candidates_parallel(
         query_smiles=smiles_series,
         df=df_1M,
         cand_type='mass',
         max_cands=256,
-        max_workers=4
+        max_workers=8,
+        desc="1M dataset retrieval"
     )
 
     # Quick histogram
@@ -199,13 +205,15 @@ def main():
     plt.close()
 
     # 2) Enrich with the 4M dataset
+    logging.info("Starting retrieval with the 4M dataset")
     candidates = get_candidates_parallel(
         query_smiles=smiles_series,
         df=df_4M,
         cand_type='mass',
         df_candidates=candidates,
         max_cands=256,
-        max_workers=4
+        max_workers=8,
+        desc="4M dataset retrieval"
     )
 
     plt.figure()
@@ -218,13 +226,15 @@ def main():
     candidates.to_pickle('MSn_cands_4M_mass.pkl')
 
     # 3) Enrich with the PubChem dataset
+    logging.info("Starting retrieval with the PubChem dataset")
     candidates = get_candidates_parallel(
         query_smiles=smiles_series,
         df=df_pubchem,
         cand_type='mass',
         df_candidates=candidates,
         max_cands=256,
-        max_workers=4
+        max_workers=8,
+        desc="PubChem 118M retrieval"
     )
 
     plt.figure()
@@ -246,5 +256,7 @@ def main():
 if __name__ == "__main__":
     # On macOS Apple Silicon, you might consider explicitly setting the start method:
     # multiprocessing.set_start_method("spawn")
+    import multiprocessing
+    multiprocessing.set_start_method("spawn")
 
     main()
