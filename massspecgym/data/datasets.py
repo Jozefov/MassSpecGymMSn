@@ -487,7 +487,7 @@ class Tree:
             for child in node.children.values():
                 self._cut_node_at_level(child, current_level + 1, max_level)
 
-    def to_pyg_data(self, featurizer: Optional[SpectrumFeaturizer] = None, hierarchical_tree: bool = True):
+    def to_pyg_data(self, featurizer: Optional[SpectrumFeaturizer] = None, hierarchical_tree: bool = False):
 
         if featurizer is None:
             edges = self.get_edges()
@@ -576,7 +576,7 @@ class MSnDataset(MassSpecDataset):
         featurizer: Optional[SpectrumFeaturizer] = None,
         max_allowed_deviation: float = 0.005,
         prune_missing_spectra: bool = True,
-        hierarchical_tree: bool = True,
+        hierarchical_tree: bool = False,
         return_mol_freq: bool = True,
         cut_tree_at_level: Optional[int] = None  # New parameter
     ):
@@ -765,7 +765,7 @@ class MSnDataset(MassSpecDataset):
                         dataset_all_tree_paths: List[
                             Tuple[str, float, List[Tuple[List[float], matchms.Spectrum]], matchms.Spectrum]],
                         prune_missing_spectra: bool = False,
-                        hierarchical_tree: bool = True,
+                        hierarchical_tree: bool = False,
                         cut_tree_at_level: Optional[int] = None
                         ) -> Tuple[List['Tree'], List['Data'], List[str]]:
         """
