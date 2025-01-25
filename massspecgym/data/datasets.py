@@ -832,7 +832,6 @@ class MSnDataset(MassSpecDataset):
             # If no mol_transform is provided, return the SMILES string
             return smi
 
-
 class MSnRetrievalDataset(MSnDataset):
     """
     Dataset containing MSn spectral trees and their corresponding molecular structures, with additional

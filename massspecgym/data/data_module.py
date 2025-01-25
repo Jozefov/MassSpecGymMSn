@@ -42,6 +42,45 @@ class MassSpecDataModule(pl.LightningDataModule):
         self.use_pyg = use_pyg
 
     def prepare_data(self):
+        """Pre-processing to be executed only on a single main device when using distributed training."""
+        pass
+        # if self.split_pth is None:
+        #     if isinstance(self.dataset, MSnDataset):
+        #         # Filter metadata to only include root identifiers
+        #         self.split = self.dataset.metadata[self.dataset.metadata["identifier"].str.endswith("_0000000")][
+        #             ["identifier", "fold"]]
+        #     else:
+        #         self.split = self.dataset.metadata[["identifier", "fold"]]
+        # else:
+        #     # NOTE: custom split is not tested
+        #     self.split = pd.read_csv(self.split_pth, sep="\t")
+        #     if set(self.split.columns) != {"identifier", "fold"}:
+        #         raise ValueError('Split file must contain "id" and "fold" columns.')
+        #     self.split["identifier"] = self.split["identifier"].astype(str)
+        #
+        #     if isinstance(self.dataset, MSnDataset):
+        #         # Use root identifiers from the dataset
+        #         dataset_identifiers = set(self.dataset.root_identifier_to_index.keys())
+        #     else:
+        #         dataset_identifiers = set(self.dataset.metadata["identifier"])
+        #
+        #     split_identifiers = set(self.split["identifier"])
+        #
+        #     if dataset_identifiers != split_identifiers:
+        #         print("Warning: Some identifiers in the split file are not found in the dataset. Taking intersection.")
+        #         common_ids = dataset_identifiers.intersection(split_identifiers)
+        #         # Filter the split to include only common identifiers
+        #         self.split = self.split[self.split["identifier"].isin(common_ids)]
+        #
+        # self.split = self.split.set_index("identifier")["fold"]
+        # if not set(self.split) <= {"train", "val", "test"}:
+        #     raise ValueError(
+        #         '"Folds" column must contain only "train", "val", or "test" values.'
+        #     )
+
+    def setup(self, stage=None):
+        """Pre-processing to be executed on every device when using distributed training."""
+
         if self.split_pth is None:
             if isinstance(self.dataset, MSnDataset):
                 # Filter metadata to only include root identifiers
@@ -53,7 +92,7 @@ class MassSpecDataModule(pl.LightningDataModule):
             # NOTE: custom split is not tested
             self.split = pd.read_csv(self.split_pth, sep="\t")
             if set(self.split.columns) != {"identifier", "fold"}:
-                raise ValueError('Split file must contain "id" and "fold" columns.')
+                raise ValueError('Split file must contain "identifier" and "fold" columns.')
             self.split["identifier"] = self.split["identifier"].astype(str)
 
             if isinstance(self.dataset, MSnDataset):
@@ -75,8 +114,6 @@ class MassSpecDataModule(pl.LightningDataModule):
             raise ValueError(
                 '"Folds" column must contain only "train", "val", or "test" values.'
             )
-
-    def setup(self, stage=None):
 
         if isinstance(self.dataset, MSnDataset):
             root_identifier_to_index = self.dataset.root_identifier_to_index

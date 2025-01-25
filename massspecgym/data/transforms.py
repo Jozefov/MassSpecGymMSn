@@ -167,7 +167,6 @@ class MolFingerprinter(MolTransform):
             mol, fp_size=self.fp_size, radius=self.radius, to_np=True
         )
 
-
 class MolToInChIKey(MolTransform):
     def __init__(self, twod: bool = True) -> None:
         self.twod = twod
@@ -175,7 +174,6 @@ class MolToInChIKey(MolTransform):
     def from_smiles(self, mol: str) -> str:
         mol = Chem.MolFromSmiles(mol)
         return utils.mol_to_inchi_key(mol, twod=self.twod)
-
 
 class MolToFormulaVector(MolTransform):
     def __init__(self):

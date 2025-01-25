@@ -183,7 +183,6 @@ def standardize_smiles(smiles: T.Union[str, T.List[str]]) -> T.Union[str, T.List
 def mol_to_inchi_key(mol: Chem.Mol, twod: bool = True) -> str:
     """
     Convert a molecule to InChI Key representation.
-    
     Args:
         mol (Chem.Mol): RDKit molecule object.
         twod (bool, optional): Return 2D InChI Key (first 14 characers of InChI Key).
@@ -192,7 +191,6 @@ def mol_to_inchi_key(mol: Chem.Mol, twod: bool = True) -> str:
     if twod:
         inchi_key = inchi_key.split("-")[0]
     return inchi_key
-
 
 def smiles_to_inchi_key(mol: str, twod: bool = True) -> str:
     """
