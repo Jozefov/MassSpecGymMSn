@@ -609,7 +609,6 @@ class MSnDataset(MassSpecDataset):
             hierarchical_tree=hierarchical_tree,
             cut_tree_at_level=self.cut_tree_at_level
         )
-        # TODO PYG trees
 
         # split trees to folds
         self.root_identifier_to_index = {}
@@ -679,21 +678,29 @@ class MSnDataset(MassSpecDataset):
     @staticmethod
     def collate_fn(batch: T.Iterable[dict]) -> dict:
         """
-        Custom collate function to handle batches of spec_tree and mol.
+        Custom collate function for PyG graphs + other scalar/tensor fields.
+        Each element of `batch` is a dict from __getitem__ above.
         """
+        # 1) Collate the "spec" PyG data
+        spec_list = [item["spec"] for item in batch]
+        spec_batch = Batch.from_data_list(spec_list)
 
-        collated_batch = {}
+        # 2) Collate the "mol"
+        mol_list = [item["mol"] for item in batch]
+        # If they are Tensors, stack them. If they are strings, you can just keep a list.
+        if isinstance(mol_list[0], torch.Tensor):
+            mol_list = torch.stack(mol_list, dim=0)
 
-        spec_trees = [item['spec'] for item in batch]
-        mols = [item['mol'] for item in batch]
+        collated_batch = {
+            "spec": spec_batch,
+            "mol":  mol_list
+        }
 
-        batch_spec_trees = Batch.from_data_list(spec_trees)
-        mols = torch.stack(mols) if isinstance(mols[0], torch.Tensor) else mols
-
-        collated_batch["spec"] = batch_spec_trees
-        collated_batch["mol"] = mols
+        # 3) Collate the other numeric/scalar fields with default_collate
+        #    (But skip the keys we already handled or which do not exist)
+        skip_keys = {"spec", "mol", "candidates", "labels", "candidates_smiles"}
         for k in batch[0].keys():
-            if k not in ['spec', 'mol', 'candidates', 'labels', 'candidates_smiles']:
+            if k not in skip_keys:
                 collated_batch[k] = default_collate([item[k] for item in batch])
 
         return collated_batch
@@ -834,8 +841,16 @@ class MSnDataset(MassSpecDataset):
 
 class MSnRetrievalDataset(MSnDataset):
     """
-    Dataset containing MSn spectral trees and their corresponding molecular structures, with additional
-    candidates of molecules for retrieval based on spectral similarity.
+    Extension of MSnDataset that also loads a dictionary of candidate molecules
+    for each item['smiles'], so we can do retrieval tasks.
+
+    The collated batch includes:
+      - 'spec' : DataBatch of PyG
+      - 'mol'  : [batch_size, fp_size] or list if string-based
+      - 'candidates' : [sum_of_candidates_in_batch, fp_size]
+      - 'labels' : 1D bool of length sum_of_candidates_in_batch
+      - 'batch_ptr': #candidates per item, shape [batch_size]
+      - 'candidates_smiles': list of length sum_of_candidates_in_batch
     """
 
     def __init__(
@@ -844,157 +859,159 @@ class MSnRetrievalDataset(MSnDataset):
         candidates_pth: T.Optional[T.Union[Path, str]] = None,
         **kwargs,
     ):
-        """
-        Args:
-            mol_label_transform (MolTransform, optional): Transformation to apply to the candidate molecules.
-                Defaults to `MolToInChIKey()`.
-            candidates_pth (Optional[Union[Path, str]], optional): Path to the .json file containing the candidates for
-                retrieval. Defaults to None, in which case the candidates for standard `molecular retrieval` challenge
-                are downloaded from HuggingFace Hub.
-            **kwargs: Additional keyword arguments passed to MSnDataset.
-        """
         super().__init__(**kwargs)
 
-        self.candidates_pth = candidates_pth
         self.mol_label_transform = mol_label_transform
 
-        # Load candidates
-        # Download candidates from HuggingFace Hub if no path is provided
-        if self.candidates_pth is None:
+        # Load the candidate SMILES from JSON
+        if candidates_pth is None:
             self.candidates_pth = utils.hugging_face_download(
                 "molecules/MassSpecGym_retrieval_candidates_mass.json"
             )
-        elif self.candidates_pth == 'bonus':
+        elif candidates_pth == 'bonus':
             self.candidates_pth = utils.hugging_face_download(
                 "molecules/MassSpecGym_retrieval_candidates_formula.json"
             )
-        elif isinstance(self.candidates_pth, str):
-            if Path(self.candidates_pth).is_file():
-                self.candidates_pth = Path(self.candidates_pth)
-            else:
-                self.candidates_pth = utils.hugging_face_download(self.candidates_pth)
+        else:
+            self.candidates_pth = Path(candidates_pth)
 
-        # Read candidates_pth from json to dict: SMILES -> respective candidate SMILES
         with open(self.candidates_pth, "r") as file:
-            self.candidates = json.load(file)
+            all_candidates_dict = json.load(file)
 
-        # Filter out indices where SMILES are missing in candidates
+        # Filter out only those indices for which we have candidate SMILES
         valid_indices = []
-        skipped_smiles = set()
-
+        skipped = 0
         for idx, smi in enumerate(self.smiles):
-            if smi in self.candidates:
+            if smi in all_candidates_dict:
                 valid_indices.append(idx)
             else:
-                skipped_smiles.add(smi)
+                skipped += 1
+        print(f"Warning: No candidates for {skipped} SMILES. Skipping them.")
 
-        print(f"Warning: No candidates for {len(skipped_smiles)} smiles. Skipping.")
-        # Update the dataset to include only valid indices
         self.valid_indices = valid_indices
+        self.candidates_dict = all_candidates_dict
 
-        # Re-map root_identifier_to_index to only include valid_indices after filtering on candidates
-        new_root_identifier_to_index = {}
-        for new_idx, old_idx in enumerate(self.valid_indices):
-            root_id = self.trees[old_idx].root.spectrum.get('identifier')
-            new_root_identifier_to_index[root_id] = new_idx
-        self.root_identifier_to_index = new_root_identifier_to_index
+        # Re‑map root_identifier_to_index so that only valid indices remain
+        new_map = {}
+        for new_i, old_i in enumerate(valid_indices):
+            rid = self.trees[old_i].root.spectrum.get('identifier')
+            new_map[rid] = new_i
+        self.root_identifier_to_index = new_map
 
         print(f"Total valid indices: {len(self.valid_indices)}")
-        print(f"Dataset length: {len(self)}")
-
-
+        print(f"MSnRetrievalDataset length: {len(self)}")
 
     def __len__(self):
         return len(self.valid_indices)
 
-    def __getitem__(self, idx):
+    def __getitem__(self, idx: int) -> dict:
+        # Map to the "true" index in the underlying MSnDataset
+        real_idx = self.valid_indices[idx]
 
-        # Map idx to the valid index
-        valid_idx = self.valid_indices[idx]
+        # Use MSnDataset's __getitem__ to get spec, mol, etc.
+        item = super().__getitem__(real_idx)
 
-        # Get the item from the parent class
-        # item is a dict with keys: 'spec' (spectral tree), 'mol' (transformed molecule)
-        item = super().__getitem__(valid_idx)
-
-        # Retrieve the original SMILES for the current index
-        smi = self.smiles[valid_idx]
+        # This is the "true" SMILES we had at that index
+        smi = self.smiles[real_idx]
         item["smiles"] = smi
 
-        # Get candidates for the query molecule
-        if smi not in self.candidates:
-            raise ValueError(f'No candidates for the query molecule {smi}.')
-        item["candidates"] = self.candidates[smi]
+        # Build the candidate list
+        candidates_smi = self.candidates_dict[smi]
+        item["candidates_smiles"] = candidates_smi
 
-        # Save the original SMILES representations of the candidates (for evaluation)
-        item["candidates_smiles"] = item["candidates"]
-
-        # Create labels by comparing the transformed query molecule with candidates
+        # labels: True if candidate is the same as the query
+        # We do this by matching InChIKey (or something) but here: mol_label_transform
         item_label = self.mol_label_transform(smi)
         item["labels"] = [
-            self.mol_label_transform(c) == item_label for c in item["candidates"]
+            (self.mol_label_transform(c_smi) == item_label)
+            for c_smi in candidates_smi
         ]
-
         if not any(item["labels"]):
-            raise ValueError(
-                f'Query molecule {smi} not found in the candidates list.'
-            )
+            raise ValueError(f"Query molecule not in candidates for {smi}.")
 
-        # Transform the query molecule and candidates
+        # Transform the *query* molecule again if needed (like your fingerprint)
         if self.mol_transform:
-            # Transform the query molecule
-            item["mol"] = self.mol_transform(smi)
-            if isinstance(item["mol"], np.ndarray):
-                item["mol"] = torch.as_tensor(item["mol"], dtype=self.dtype)
+            query_fp = self.mol_transform(smi)
+            if isinstance(query_fp, np.ndarray):
+                query_fp = torch.as_tensor(query_fp, dtype=self.dtype)
+            item["mol"] = query_fp
 
-            # Transform the candidates
-            item["candidates"] = [self.mol_transform(c) for c in item["candidates"]]
-            item["candidates"] = [torch.as_tensor(c, dtype=self.dtype) if isinstance(c, np.ndarray) else c for c in item["candidates"]]
+            # Transform each candidate
+            candidates_fp = []
+            for c_smi in candidates_smi:
+                out = self.mol_transform(c_smi)
+                if isinstance(out, np.ndarray):
+                    out = torch.as_tensor(out, dtype=self.dtype)
+                candidates_fp.append(out)
+            item["candidates"] = candidates_fp
+        else:
+            # If no transform, store as plain strings or something
+            item["candidates"] = candidates_smi
 
         return item
 
     @staticmethod
     def collate_fn(batch: T.Iterable[dict]) -> dict:
         """
-        Custom collate function to handle batches of spec, mol, candidates, and labels.
+        Collate a batch of retrieval data:
+          - spec -> single DataBatch
+          - mol  -> stacked if Tensors
+          - candidates -> stacked (2D)
+          - labels -> 1D flatten
+          - batch_ptr -> #candidates per item
+          - candidates_smiles -> big list
         """
-        # Initialize the collated batch
-        collated_batch = {}
+        # 1) Collate the PyG specs
+        spec_list = [d["spec"] for d in batch]
+        spec_batch = Batch.from_data_list(spec_list)
 
-        # Collate spectral trees (spec)
-        spec_trees = [item['spec'] for item in batch]
-        batch_spec_trees = Batch.from_data_list(spec_trees)
-        collated_batch['spec'] = batch_spec_trees
+        # 2) Collate the 'mol'
+        mol_list = [d["mol"] for d in batch]
+        # If these are Tensors, stack them
+        if isinstance(mol_list[0], torch.Tensor):
+            mol_list = torch.stack(mol_list, dim=0)
 
-        # Collate transformed molecules (mol)
-        mols = [item['mol'] for item in batch]
-        if isinstance(mols[0], torch.Tensor):
-            mols = torch.stack(mols)
-        collated_batch['mol'] = mols
+        collated_batch = {
+            "spec": spec_batch,
+            "mol":  mol_list
+        }
 
-        # Collate other items except 'candidates', 'labels', 'candidates_smiles'
+        # 3) Collate numeric/scalar metadata with default_collate
+        skip_keys = {"spec", "mol", "candidates", "labels", "candidates_smiles"}
         for k in batch[0].keys():
-            if k not in ['spec', 'mol', 'candidates', 'labels', 'candidates_smiles']:
+            if k not in skip_keys:
                 collated_batch[k] = default_collate([item[k] for item in batch])
 
-        collated_candidates = []
-        for item in batch:
-            # TODO may to be faster then extend
-            # Ensure candidates are tensors
-            candidates = [torch.as_tensor(c, dtype=item['mol'].dtype) if not isinstance(c, torch.Tensor) else c for c in
-                          item['candidates']]
-            collated_candidates.extend(candidates)
-        collated_batch["candidates"] = torch.stack(collated_candidates)
+        # 4) Flatten the candidates
+        all_candidates = []
+        for d in batch:
+            # each d["candidates"] is a list of Tensors or strings
+            # If it's a Tensor, shape might be [fp_size]
+            # We'll gather them into all_candidates
+            for c in d["candidates"]:
+                if isinstance(c, torch.Tensor):
+                    all_candidates.append(c)
+                else:
+                    # If string, store them as well (unusual for retrieval though)
+                    all_candidates.append(c)
 
-        collated_batch["labels"] = torch.as_tensor(
-            sum([item["labels"] for item in batch], start=[])
-        )
+        # If your candidates are Tensors, do a stack
+        if isinstance(all_candidates[0], torch.Tensor):
+            all_candidates = torch.stack(all_candidates, dim=0)
 
-        collated_batch["batch_ptr"] = torch.as_tensor(
-            [len(item["candidates"]) for item in batch]
-        )
+        collated_batch["candidates"] = all_candidates
 
-        collated_batch["candidates_smiles"] = sum(
-            [item["candidates_smiles"] for item in batch], start=[]
-        )
+        # 5) Flatten the labels
+        # item["labels"] is a python list of bool for each candidate
+        all_labels = sum([d["labels"] for d in batch], start=[])
+        collated_batch["labels"] = torch.as_tensor(all_labels, dtype=torch.bool)
+
+        # 6) batch_ptr: how many candidates per item
+        lens = [len(d["candidates"]) for d in batch]
+        collated_batch["batch_ptr"] = torch.as_tensor(lens, dtype=torch.int)
+
+        # 7) Flatten candidates_smiles
+        all_cand_smi = sum([d["candidates_smiles"] for d in batch], start=[])
+        collated_batch["candidates_smiles"] = all_cand_smi
 
         return collated_batch

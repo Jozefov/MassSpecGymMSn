@@ -24,7 +24,7 @@ class MassSpecDataModule(pl.LightningDataModule):
         num_workers: int = 0,
         persistent_workers: bool = True,
         split_pth: Optional[Path] = None,
-        use_pyg: bool = False,
+        pin_memory: bool = True,
         **kwargs
     ):
         """
@@ -39,7 +39,7 @@ class MassSpecDataModule(pl.LightningDataModule):
         self.batch_size = batch_size
         self.num_workers = num_workers
         self.persistent_workers = persistent_workers if num_workers > 0 else False
-        self.use_pyg = use_pyg
+        self.pin_memory = pin_memory
 
     def prepare_data(self):
         """Pre-processing to be executed only on a single main device when using distributed training."""
@@ -147,33 +147,16 @@ class MassSpecDataModule(pl.LightningDataModule):
                 print(f"Test dataset size: {len(self.test_dataset)}")
 
     def _get_dataloader(self, dataset, shuffle=False):
-        """
-        Helper function to return the appropriate dataloader (PyTorch or PyG) based on dataset type
-        and the use_pyg flag.
-        """
-        if self.use_pyg and isinstance(self.dataset, MSnDataset):
-            # Import PyG DataLoader
-            from torch_geometric.loader import DataLoader as PyGDataLoader
-            return PyGDataLoader(
-                dataset,
-                batch_size=self.batch_size,
-                shuffle=shuffle,
-                num_workers=self.num_workers,
-                persistent_workers=self.persistent_workers,
-                drop_last=False,
-                collate_fn=self.dataset.collate_fn,
-            )
-        else:
-            # Use standard DataLoader
-            return DataLoader(
-                dataset,
-                batch_size=self.batch_size,
-                shuffle=shuffle,
-                num_workers=self.num_workers,
-                persistent_workers=self.persistent_workers,
-                drop_last=False,
-                collate_fn=self.dataset.collate_fn,
-            )
+        return DataLoader(
+            dataset,
+            batch_size=self.batch_size,
+            shuffle=shuffle,
+            num_workers=self.num_workers,
+            persistent_workers=self.persistent_workers,
+            drop_last=False,
+            collate_fn=self.dataset.collate_fn,
+            pin_memory=self.pin_memory,
+        )
 
     def train_dataloader(self):
         return self._get_dataloader(self.train_dataset, shuffle=True)
