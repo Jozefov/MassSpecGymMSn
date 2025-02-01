@@ -152,4 +152,5 @@ data/ClassyFire/
 data/subset_investigation/
 data/candidates_generation/
 data/tokenizers/
+*.pth
 
