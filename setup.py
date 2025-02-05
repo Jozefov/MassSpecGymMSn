@@ -28,7 +28,7 @@ setup(
         "tokenizers",
         "selfies",
         "numpy",
-        "rdkit",
+        "rdkit==2024.03.5",
         "myopic-mces",
         "matchms",
         "wandb",
