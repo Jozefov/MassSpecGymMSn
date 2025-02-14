@@ -1239,174 +1239,174 @@ class MSnRetrievalDataset(MSnDataset):
     def __len__(self):
         return len(self.valid_indices)
 
-    # @profile_function
-    # def __getitem__(self, idx: int) -> dict:
-    #     # Map to the actual index in the underlying dataset.
-    #     real_idx = self.valid_indices[idx]
-    #     # Get the base item (e.g., 'spec', 'precursor_mz', etc.) from the parent.
-    #     item = super().__getitem__(real_idx)
-    #     # Set the query SMILES.
-    #     smi = self.smiles[real_idx]
-    #     item["smiles"] = smi
-    #     # Also include the original candidate SMILES.
-    #     item["candidates_smiles"] = self.candidates_dict[smi]
-    #     # Retrieve precomputed values.
-    #     pre = self.precomputed[real_idx]
-    #     item["mol"] = pre["mol"]
-    #     item["candidates"] = pre["candidates"]
-    #     item["labels"] = pre["labels"]
-    #     return item
-    #
-    # @staticmethod
-    # def collate_fn(batch: T.Iterable[dict]) -> dict:
-    #     collated_batch = {}
-    #     # Collate the PyG batch.
-    #     spec_list = [item["spec"] for item in batch]
-    #     spec_batch = Batch.from_data_list(spec_list)
-    #     collated_batch["spec"] = spec_batch
-    #
-    #     # Collate the transformed query molecules.
-    #     mol_list = [item["mol"] for item in batch]
-    #     if isinstance(mol_list[0], torch.Tensor):
-    #         mol_list = torch.stack(mol_list, dim=0)
-    #     collated_batch["mol"] = mol_list
-    #
-    #     # Collate any additional scalar fields.
-    #     for k in batch[0].keys():
-    #         if k not in {"spec", "mol", "candidates", "labels", "candidates_smiles"}:
-    #             collated_batch[k] = default_collate([item[k] for item in batch])
-    #
-    #     # For candidates, flatten the lists and stack if tensors.
-    #     all_candidates = []
-    #     for item in batch:
-    #         for cand in item["candidates"]:
-    #             all_candidates.append(cand)
-    #     if isinstance(all_candidates[0], torch.Tensor):
-    #         all_candidates = torch.stack(all_candidates, dim=0)
-    #     collated_batch["candidates"] = all_candidates
-    #
-    #     # Flatten candidate labels.
-    #     all_labels = sum([item["labels"] for item in batch], start=[])
-    #     collated_batch["labels"] = torch.as_tensor(all_labels, dtype=torch.bool)
-    #
-    #     # Build batch_ptr (number of candidates per item).
-    #     batch_ptr = [len(item["candidates"]) for item in batch]
-    #     collated_batch["batch_ptr"] = torch.as_tensor(batch_ptr, dtype=torch.int)
-    #
-    #     # Concatenate candidate SMILES.
-    #     all_cand_smiles = sum([item["candidates_smiles"] for item in batch], start=[])
-    #     collated_batch["candidates_smiles"] = all_cand_smiles
-    #
-    #     return collated_batch
-
     @profile_function
     def __getitem__(self, idx: int) -> dict:
-        t0 = time.perf_counter()
-        # Map to the actual index.
+        # Map to the actual index in the underlying dataset.
         real_idx = self.valid_indices[idx]
-        t1 = time.perf_counter()
-        # Get base item from parent.
+        # Get the base item (e.g., 'spec', 'precursor_mz', etc.) from the parent.
         item = super().__getitem__(real_idx)
-        t2 = time.perf_counter()
-        # Retrieve the true SMILES.
+        # Set the query SMILES.
         smi = self.smiles[real_idx]
-        t3 = time.perf_counter()
         item["smiles"] = smi
-        t4 = time.perf_counter()
-        # Include the original candidate SMILES.
+        # Also include the original candidate SMILES.
         item["candidates_smiles"] = self.candidates_dict[smi]
-        t5 = time.perf_counter()
         # Retrieve precomputed values.
         pre = self.precomputed[real_idx]
-        t6 = time.perf_counter()
         item["mol"] = pre["mol"]
-        t7 = time.perf_counter()
         item["candidates"] = pre["candidates"]
-        t8 = time.perf_counter()
         item["labels"] = pre["labels"]
-        t9 = time.perf_counter()
-        print(f"__getitem__ timing breakdown for idx {idx}:")
-        print(f"  Map valid index: {(t1-t0)*1000:.2f} ms")
-        print(f"  Parent __getitem__: {(t2-t1)*1000:.2f} ms")
-        print(f"  Retrieve SMILES: {(t3-t2)*1000:.2f} ms")
-        print(f"  Set SMILES: {(t4-t3)*1000:.2f} ms")
-        print(f"  Set candidates_smiles: {(t5-t4)*1000:.2f} ms")
-        print(f"  Precomputed lookup: {(t6-t5)*1000:.2f} ms")
-        print(f"  Set query mol: {(t7-t6)*1000:.2f} ms")
-        print(f"  Set candidates: {(t8-t7)*1000:.2f} ms")
-        print(f"  Set labels: {(t9-t8)*1000:.2f} ms")
-        print(f"  Total __getitem__: {(t9-t0)*1000:.2f} ms")
         return item
 
     @staticmethod
-    @profile_function
     def collate_fn(batch: T.Iterable[dict]) -> dict:
-        t0 = time.perf_counter()
         collated_batch = {}
-        t1 = time.perf_counter()
-        # Collate the PyG specs.
+        # Collate the PyG batch.
         spec_list = [item["spec"] for item in batch]
-        t2 = time.perf_counter()
         spec_batch = Batch.from_data_list(spec_list)
-        t3 = time.perf_counter()
         collated_batch["spec"] = spec_batch
-        t4 = time.perf_counter()
-        # Collate query molecules.
+
+        # Collate the transformed query molecules.
         mol_list = [item["mol"] for item in batch]
-        t5 = time.perf_counter()
         if isinstance(mol_list[0], torch.Tensor):
             mol_list = torch.stack(mol_list, dim=0)
-        t6 = time.perf_counter()
         collated_batch["mol"] = mol_list
-        t7 = time.perf_counter()
+
         # Collate any additional scalar fields.
         for k in batch[0].keys():
             if k not in {"spec", "mol", "candidates", "labels", "candidates_smiles"}:
                 collated_batch[k] = default_collate([item[k] for item in batch])
-        t8 = time.perf_counter()
-        # Flatten candidates.
+
+        # For candidates, flatten the lists and stack if tensors.
         all_candidates = []
         for item in batch:
             for cand in item["candidates"]:
                 all_candidates.append(cand)
-        t9 = time.perf_counter()
         if isinstance(all_candidates[0], torch.Tensor):
             all_candidates = torch.stack(all_candidates, dim=0)
-        t10 = time.perf_counter()
         collated_batch["candidates"] = all_candidates
-        t11 = time.perf_counter()
+
         # Flatten candidate labels.
         all_labels = sum([item["labels"] for item in batch], start=[])
-        t12 = time.perf_counter()
         collated_batch["labels"] = torch.as_tensor(all_labels, dtype=torch.bool)
-        t13 = time.perf_counter()
+
         # Build batch_ptr (number of candidates per item).
         batch_ptr = [len(item["candidates"]) for item in batch]
-        t14 = time.perf_counter()
         collated_batch["batch_ptr"] = torch.as_tensor(batch_ptr, dtype=torch.int)
-        t15 = time.perf_counter()
+
         # Concatenate candidate SMILES.
         all_cand_smiles = sum([item["candidates_smiles"] for item in batch], start=[])
-        t16 = time.perf_counter()
         collated_batch["candidates_smiles"] = all_cand_smiles
-        t17 = time.perf_counter()
-        print("collate_fn timing breakdown:")
-        print(f"  Init collated batch: {(t1-t0)*1000:.2f} ms")
-        print(f"  Build spec list: {(t2-t1)*1000:.2f} ms")
-        print(f"  PyG Batch creation: {(t3-t2)*1000:.2f} ms")
-        print(f"  Set spec: {(t4-t3)*1000:.2f} ms")
-        print(f"  Build mol list: {(t5-t4)*1000:.2f} ms")
-        print(f"  Stack mol: {(t6-t5)*1000:.2f} ms")
-        print(f"  Set mol: {(t7-t6)*1000:.2f} ms")
-        print(f"  Collate additional fields: {(t8-t7)*1000:.2f} ms")
-        print(f"  Build candidate list: {(t9-t8)*1000:.2f} ms")
-        print(f"  Stack candidates: {(t10-t9)*1000:.2f} ms")
-        print(f"  Set candidates: {(t11-t10)*1000:.2f} ms")
-        print(f"  Build labels: {(t12-t11)*1000:.2f} ms")
-        print(f"  Set labels: {(t13-t12)*1000:.2f} ms")
-        print(f"  Build batch_ptr: {(t14-t13)*1000:.2f} ms")
-        print(f"  Set batch_ptr: {(t15-t14)*1000:.2f} ms")
-        print(f"  Build candidates_smiles: {(t16-t15)*1000:.2f} ms")
-        print(f"  Set candidates_smiles: {(t17-t16)*1000:.2f} ms")
-        print(f"  Total collate_fn: {(t17-t0)*1000:.2f} ms")
+
         return collated_batch
+
+    # @profile_function
+    # def __getitem__(self, idx: int) -> dict:
+    #     t0 = time.perf_counter()
+    #     # Map to the actual index.
+    #     real_idx = self.valid_indices[idx]
+    #     t1 = time.perf_counter()
+    #     # Get base item from parent.
+    #     item = super().__getitem__(real_idx)
+    #     t2 = time.perf_counter()
+    #     # Retrieve the true SMILES.
+    #     smi = self.smiles[real_idx]
+    #     t3 = time.perf_counter()
+    #     item["smiles"] = smi
+    #     t4 = time.perf_counter()
+    #     # Include the original candidate SMILES.
+    #     item["candidates_smiles"] = self.candidates_dict[smi]
+    #     t5 = time.perf_counter()
+    #     # Retrieve precomputed values.
+    #     pre = self.precomputed[real_idx]
+    #     t6 = time.perf_counter()
+    #     item["mol"] = pre["mol"]
+    #     t7 = time.perf_counter()
+    #     item["candidates"] = pre["candidates"]
+    #     t8 = time.perf_counter()
+    #     item["labels"] = pre["labels"]
+    #     t9 = time.perf_counter()
+    #     print(f"__getitem__ timing breakdown for idx {idx}:")
+    #     print(f"  Map valid index: {(t1-t0)*1000:.2f} ms")
+    #     print(f"  Parent __getitem__: {(t2-t1)*1000:.2f} ms")
+    #     print(f"  Retrieve SMILES: {(t3-t2)*1000:.2f} ms")
+    #     print(f"  Set SMILES: {(t4-t3)*1000:.2f} ms")
+    #     print(f"  Set candidates_smiles: {(t5-t4)*1000:.2f} ms")
+    #     print(f"  Precomputed lookup: {(t6-t5)*1000:.2f} ms")
+    #     print(f"  Set query mol: {(t7-t6)*1000:.2f} ms")
+    #     print(f"  Set candidates: {(t8-t7)*1000:.2f} ms")
+    #     print(f"  Set labels: {(t9-t8)*1000:.2f} ms")
+    #     print(f"  Total __getitem__: {(t9-t0)*1000:.2f} ms")
+    #     return item
+    #
+    # @staticmethod
+    # @profile_function
+    # def collate_fn(batch: T.Iterable[dict]) -> dict:
+    #     t0 = time.perf_counter()
+    #     collated_batch = {}
+    #     t1 = time.perf_counter()
+    #     # Collate the PyG specs.
+    #     spec_list = [item["spec"] for item in batch]
+    #     t2 = time.perf_counter()
+    #     spec_batch = Batch.from_data_list(spec_list)
+    #     t3 = time.perf_counter()
+    #     collated_batch["spec"] = spec_batch
+    #     t4 = time.perf_counter()
+    #     # Collate query molecules.
+    #     mol_list = [item["mol"] for item in batch]
+    #     t5 = time.perf_counter()
+    #     if isinstance(mol_list[0], torch.Tensor):
+    #         mol_list = torch.stack(mol_list, dim=0)
+    #     t6 = time.perf_counter()
+    #     collated_batch["mol"] = mol_list
+    #     t7 = time.perf_counter()
+    #     # Collate any additional scalar fields.
+    #     for k in batch[0].keys():
+    #         if k not in {"spec", "mol", "candidates", "labels", "candidates_smiles"}:
+    #             collated_batch[k] = default_collate([item[k] for item in batch])
+    #     t8 = time.perf_counter()
+    #     # Flatten candidates.
+    #     all_candidates = []
+    #     for item in batch:
+    #         for cand in item["candidates"]:
+    #             all_candidates.append(cand)
+    #     t9 = time.perf_counter()
+    #     if isinstance(all_candidates[0], torch.Tensor):
+    #         all_candidates = torch.stack(all_candidates, dim=0)
+    #     t10 = time.perf_counter()
+    #     collated_batch["candidates"] = all_candidates
+    #     t11 = time.perf_counter()
+    #     # Flatten candidate labels.
+    #     all_labels = sum([item["labels"] for item in batch], start=[])
+    #     t12 = time.perf_counter()
+    #     collated_batch["labels"] = torch.as_tensor(all_labels, dtype=torch.bool)
+    #     t13 = time.perf_counter()
+    #     # Build batch_ptr (number of candidates per item).
+    #     batch_ptr = [len(item["candidates"]) for item in batch]
+    #     t14 = time.perf_counter()
+    #     collated_batch["batch_ptr"] = torch.as_tensor(batch_ptr, dtype=torch.int)
+    #     t15 = time.perf_counter()
+    #     # Concatenate candidate SMILES.
+    #     all_cand_smiles = sum([item["candidates_smiles"] for item in batch], start=[])
+    #     t16 = time.perf_counter()
+    #     collated_batch["candidates_smiles"] = all_cand_smiles
+    #     t17 = time.perf_counter()
+    #     print("collate_fn timing breakdown:")
+    #     print(f"  Init collated batch: {(t1-t0)*1000:.2f} ms")
+    #     print(f"  Build spec list: {(t2-t1)*1000:.2f} ms")
+    #     print(f"  PyG Batch creation: {(t3-t2)*1000:.2f} ms")
+    #     print(f"  Set spec: {(t4-t3)*1000:.2f} ms")
+    #     print(f"  Build mol list: {(t5-t4)*1000:.2f} ms")
+    #     print(f"  Stack mol: {(t6-t5)*1000:.2f} ms")
+    #     print(f"  Set mol: {(t7-t6)*1000:.2f} ms")
+    #     print(f"  Collate additional fields: {(t8-t7)*1000:.2f} ms")
+    #     print(f"  Build candidate list: {(t9-t8)*1000:.2f} ms")
+    #     print(f"  Stack candidates: {(t10-t9)*1000:.2f} ms")
+    #     print(f"  Set candidates: {(t11-t10)*1000:.2f} ms")
+    #     print(f"  Build labels: {(t12-t11)*1000:.2f} ms")
+    #     print(f"  Set labels: {(t13-t12)*1000:.2f} ms")
+    #     print(f"  Build batch_ptr: {(t14-t13)*1000:.2f} ms")
+    #     print(f"  Set batch_ptr: {(t15-t14)*1000:.2f} ms")
+    #     print(f"  Build candidates_smiles: {(t16-t15)*1000:.2f} ms")
+    #     print(f"  Set candidates_smiles: {(t17-t16)*1000:.2f} ms")
+    #     print(f"  Total collate_fn: {(t17-t0)*1000:.2f} ms")
+    #     return collated_batch
