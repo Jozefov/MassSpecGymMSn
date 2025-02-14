@@ -971,7 +971,7 @@ class MSnRetrievalDataset(MSnDataset):
     @profile_function
     def __getitem__(self, idx: int) -> dict:
         t0 = time.perf_counter()
-        # Map to the "true" index
+        # Map to the "true" index in the underlying MSnDataset
         real_idx = self.valid_indices[idx]
         t1 = time.perf_counter()
 
@@ -985,7 +985,7 @@ class MSnRetrievalDataset(MSnDataset):
         item["smiles"] = smi
         t4 = time.perf_counter()
 
-        # Build the candidate list from candidates_dict
+        # Build the candidate list from the candidates dictionary
         candidates_smi = self.candidates_dict[smi]
         t5 = time.perf_counter()
         item["candidates_smiles"] = candidates_smi
@@ -995,26 +995,36 @@ class MSnRetrievalDataset(MSnDataset):
         item_label = self.mol_label_transform(smi)
         t7 = time.perf_counter()
 
-        # Build label list for all candidate SMILES
-        labels = [self.mol_label_transform(c_smi) == item_label for c_smi in candidates_smi]
+        # Build candidate labels list
+        candidate_labels = []
+        for c_smi in candidates_smi:
+            t_label0 = time.perf_counter()
+            candidate_labels.append(self.mol_label_transform(c_smi) == item_label)
+            t_label1 = time.perf_counter()
+            # Print each candidate label transform timing if desired:
+            # print(f"Candidate label transform: {(t_label1-t_label0)*1000:.2f} ms")
         t8 = time.perf_counter()
-        item["labels"] = labels
+        item["labels"] = candidate_labels
         if not any(item["labels"]):
             raise ValueError(f"Query molecule {smi} not found in candidates.")
         t9 = time.perf_counter()
 
-        # Transform the query molecule and candidates if mol_transform is provided
+        # If a molecule transform is provided, transform query and candidates
         if self.mol_transform:
+            # Transform query molecule
+            t_query0 = time.perf_counter()
             query_fp = self.mol_transform(smi)
-            t10 = time.perf_counter()
+            t_query1 = time.perf_counter()
             if isinstance(query_fp, np.ndarray):
                 query_fp = torch.as_tensor(query_fp, dtype=self.dtype)
-            t11 = time.perf_counter()
+            t_query2 = time.perf_counter()
             item["mol"] = query_fp
-            t12 = time.perf_counter()
+            t_query3 = time.perf_counter()
 
-            # Transform each candidate
+            # Transform each candidate in a loop
             candidates_fp = []
+            t_candidates_start = time.perf_counter()
+            candidate_loop_times = []
             for c_smi in candidates_smi:
                 t_iter0 = time.perf_counter()
                 out = self.mol_transform(c_smi)
@@ -1023,15 +1033,22 @@ class MSnRetrievalDataset(MSnDataset):
                     out = torch.as_tensor(out, dtype=self.dtype)
                 t_iter2 = time.perf_counter()
                 candidates_fp.append(out)
-                t_iter3 = time.perf_counter()
-                print(f"Candidate transform timings: transform: {(t_iter1-t_iter0)*1000:.2f} ms, tensor conversion: {(t_iter2-t_iter1)*1000:.2f} ms, loop overhead: {(t_iter3-t_iter2)*1000:.2f} ms")
-            t13 = time.perf_counter()
+                candidate_loop_times.append((t_iter1 - t_iter0, t_iter2 - t_iter1))
+            t_candidates_end = time.perf_counter()
             item["candidates"] = candidates_fp
-            t14 = time.perf_counter()
+            t_candidates_total = t_candidates_end - t_candidates_start
+
+            # Print detailed candidate loop timing summary:
+            avg_transform = sum(x for x, _ in candidate_loop_times) / len(candidate_loop_times)
+            avg_tensor = sum(y for _, y in candidate_loop_times) / len(candidate_loop_times)
+            print(f"Candidate loop total: {t_candidates_total*1000:.2f} ms, "
+                  f"avg transform: {avg_transform*1000:.2f} ms, avg tensor conversion: {avg_tensor*1000:.2f} ms")
+            t_final = time.perf_counter()
         else:
             item["candidates"] = candidates_smi
-            t14 = time.perf_counter()
+            t_final = time.perf_counter()
 
+        # Print overall breakdown for __getitem__
         print(f"__getitem__ timing breakdown for idx {idx}:")
         print(f"  Map valid index: {(t1-t0)*1000:.2f} ms")
         print(f"  Parent __getitem__: {(t2-t1)*1000:.2f} ms")
@@ -1043,11 +1060,11 @@ class MSnRetrievalDataset(MSnDataset):
         print(f"  Build candidate labels: {(t8-t7)*1000:.2f} ms")
         print(f"  Label check: {(t9-t8)*1000:.2f} ms")
         if self.mol_transform:
-            print(f"  Mol transform on query: {(t10-t9)*1000:.2f} ms")
-            print(f"  Tensor conversion on query: {(t11-t10)*1000:.2f} ms")
-            print(f"  Set query mol: {(t12-t11)*1000:.2f} ms")
-            print(f"  Candidate loop total: {(t13-t12)*1000:.2f} ms")
-            print(f"  Set candidates: {(t14-t13)*1000:.2f} ms")
+            print(f"  Mol transform on query: {(t_query1-t_query0)*1000:.2f} ms")
+            print(f"  Tensor conversion on query: {(t_query2-t_query1)*1000:.2f} ms")
+            print(f"  Set query mol: {(t_query3-t_query2)*1000:.2f} ms")
+            print(f"  Candidate loop total: {t_candidates_total*1000:.2f} ms")
+        print(f"  Total __getitem__: {(t_final-t0)*1000:.2f} ms")
         return item
 
     @staticmethod
