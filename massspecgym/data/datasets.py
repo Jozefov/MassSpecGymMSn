@@ -976,7 +976,7 @@ class MSnRetrievalDataset(MSnDataset):
         t1 = time.perf_counter()
 
         # Get base item from the parent class
-        item = super().__getitem__(real_idx, transform_mol=False)
+        item = super().__getitem__(real_idx)
         t2 = time.perf_counter()
 
         # Retrieve the true SMILES for this index
