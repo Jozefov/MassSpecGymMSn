@@ -922,51 +922,132 @@ class MSnRetrievalDataset(MSnDataset):
     def __len__(self):
         return len(self.valid_indices)
 
+    # @profile_function
+    # def __getitem__(self, idx: int) -> dict:
+    #     # Map to the "true" index in the underlying MSnDataset
+    #     real_idx = self.valid_indices[idx]
+    #
+    #     # Use MSnDataset's __getitem__ to get spec, mol, etc.
+    #     item = super().__getitem__(real_idx)
+    #
+    #     # This is the "true" SMILES we had at that index
+    #     smi = self.smiles[real_idx]
+    #     item["smiles"] = smi
+    #
+    #     # Build the candidate list
+    #     candidates_smi = self.candidates_dict[smi]
+    #     item["candidates_smiles"] = candidates_smi
+    #
+    #     # labels: True if candidate is the same as the query
+    #     # We do this by matching InChIKey (or something) but here: mol_label_transform
+    #     item_label = self.mol_label_transform(smi)
+    #     item["labels"] = [
+    #         (self.mol_label_transform(c_smi) == item_label)
+    #         for c_smi in candidates_smi
+    #     ]
+    #     if not any(item["labels"]):
+    #         raise ValueError(f"Query molecule not in candidates for {smi}.")
+    #
+    #     # Transform the *query* molecule again if needed (like your fingerprint)
+    #     if self.mol_transform:
+    #         query_fp = self.mol_transform(smi)
+    #         if isinstance(query_fp, np.ndarray):
+    #             query_fp = torch.as_tensor(query_fp, dtype=self.dtype)
+    #         item["mol"] = query_fp
+    #
+    #         # Transform each candidate
+    #         candidates_fp = []
+    #         for c_smi in candidates_smi:
+    #             out = self.mol_transform(c_smi)
+    #             if isinstance(out, np.ndarray):
+    #                 out = torch.as_tensor(out, dtype=self.dtype)
+    #             candidates_fp.append(out)
+    #         item["candidates"] = candidates_fp
+    #     else:
+    #         # If no transform, store as plain strings or something
+    #         item["candidates"] = candidates_smi
+    #
+    #     return item
     @profile_function
     def __getitem__(self, idx: int) -> dict:
-        # Map to the "true" index in the underlying MSnDataset
+        t0 = time.perf_counter()
+        # Map to the "true" index
         real_idx = self.valid_indices[idx]
+        t1 = time.perf_counter()
 
-        # Use MSnDataset's __getitem__ to get spec, mol, etc.
-        item = super().__getitem__(real_idx)
+        # Get base item from the parent class
+        item = super().__getitem__(real_idx, transform_mol=False)
+        t2 = time.perf_counter()
 
-        # This is the "true" SMILES we had at that index
+        # Retrieve the true SMILES for this index
         smi = self.smiles[real_idx]
+        t3 = time.perf_counter()
         item["smiles"] = smi
+        t4 = time.perf_counter()
 
-        # Build the candidate list
+        # Build the candidate list from candidates_dict
         candidates_smi = self.candidates_dict[smi]
+        t5 = time.perf_counter()
         item["candidates_smiles"] = candidates_smi
+        t6 = time.perf_counter()
 
-        # labels: True if candidate is the same as the query
-        # We do this by matching InChIKey (or something) but here: mol_label_transform
+        # Compute query label
         item_label = self.mol_label_transform(smi)
-        item["labels"] = [
-            (self.mol_label_transform(c_smi) == item_label)
-            for c_smi in candidates_smi
-        ]
-        if not any(item["labels"]):
-            raise ValueError(f"Query molecule not in candidates for {smi}.")
+        t7 = time.perf_counter()
 
-        # Transform the *query* molecule again if needed (like your fingerprint)
+        # Build label list for all candidate SMILES
+        labels = [self.mol_label_transform(c_smi) == item_label for c_smi in candidates_smi]
+        t8 = time.perf_counter()
+        item["labels"] = labels
+        if not any(item["labels"]):
+            raise ValueError(f"Query molecule {smi} not found in candidates.")
+        t9 = time.perf_counter()
+
+        # Transform the query molecule and candidates if mol_transform is provided
         if self.mol_transform:
             query_fp = self.mol_transform(smi)
+            t10 = time.perf_counter()
             if isinstance(query_fp, np.ndarray):
                 query_fp = torch.as_tensor(query_fp, dtype=self.dtype)
+            t11 = time.perf_counter()
             item["mol"] = query_fp
+            t12 = time.perf_counter()
 
             # Transform each candidate
             candidates_fp = []
             for c_smi in candidates_smi:
+                t_iter0 = time.perf_counter()
                 out = self.mol_transform(c_smi)
+                t_iter1 = time.perf_counter()
                 if isinstance(out, np.ndarray):
                     out = torch.as_tensor(out, dtype=self.dtype)
+                t_iter2 = time.perf_counter()
                 candidates_fp.append(out)
+                t_iter3 = time.perf_counter()
+                print(f"Candidate transform timings: transform: {(t_iter1-t_iter0)*1000:.2f} ms, tensor conversion: {(t_iter2-t_iter1)*1000:.2f} ms, loop overhead: {(t_iter3-t_iter2)*1000:.2f} ms")
+            t13 = time.perf_counter()
             item["candidates"] = candidates_fp
+            t14 = time.perf_counter()
         else:
-            # If no transform, store as plain strings or something
             item["candidates"] = candidates_smi
+            t14 = time.perf_counter()
 
+        print(f"__getitem__ timing breakdown for idx {idx}:")
+        print(f"  Map valid index: {(t1-t0)*1000:.2f} ms")
+        print(f"  Parent __getitem__: {(t2-t1)*1000:.2f} ms")
+        print(f"  Retrieve smi: {(t3-t2)*1000:.2f} ms")
+        print(f"  Set smi in item: {(t4-t3)*1000:.2f} ms")
+        print(f"  Candidate lookup: {(t5-t4)*1000:.2f} ms")
+        print(f"  Set candidates_smiles: {(t6-t5)*1000:.2f} ms")
+        print(f"  Mol label transform (query): {(t7-t6)*1000:.2f} ms")
+        print(f"  Build candidate labels: {(t8-t7)*1000:.2f} ms")
+        print(f"  Label check: {(t9-t8)*1000:.2f} ms")
+        if self.mol_transform:
+            print(f"  Mol transform on query: {(t10-t9)*1000:.2f} ms")
+            print(f"  Tensor conversion on query: {(t11-t10)*1000:.2f} ms")
+            print(f"  Set query mol: {(t12-t11)*1000:.2f} ms")
+            print(f"  Candidate loop total: {(t13-t12)*1000:.2f} ms")
+            print(f"  Set candidates: {(t14-t13)*1000:.2f} ms")
         return item
 
     @staticmethod
