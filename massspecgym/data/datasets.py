@@ -1136,10 +1136,68 @@ class MSnDataset(MassSpecDataset):
     #
     #     return collated_batch
 
+import multiprocessing
+import os
+def _precompute_for_index(args):
+    """
+    Precompute candidate transformations and labels for a single valid index.
+
+    Parameters:
+      - args: a tuple containing:
+          idx: the index (into self.smiles, etc.)
+          smiles: the list of SMILES (from self.smiles)
+          candidates_dict: dict mapping SMILES to candidate SMILES
+          mol_transform: function to transform a SMILES into a molecular representation
+          mol_label_transform: function to produce a label (e.g. InChIKey) from a SMILES
+          dtype: torch.dtype for tensor conversion
+    Returns:
+      A tuple (idx, precomputed_dict) where precomputed_dict contains:
+        "mol": the transformed query representation,
+        "candidates": a list of transformed candidate representations,
+        "labels": a list of booleans for each candidate,
+        "candidates_smiles": the original candidate SMILES list.
+    """
+    idx, smiles, candidates_dict, mol_transform, mol_label_transform, dtype = args
+    smi = smiles[idx]
+    query_label = mol_label_transform(smi)
+    # Compute the transformed query fingerprint.
+    if mol_transform:
+        query_fp = mol_transform(smi)
+        if isinstance(query_fp, np.ndarray):
+            query_fp = torch.as_tensor(query_fp, dtype=dtype)
+    else:
+        query_fp = smi  # fallback
+    # Retrieve candidate SMILES.
+    candidates_smi = candidates_dict[smi]
+    # Transform each candidate.
+    candidate_transformed = []
+    if mol_transform:
+        for c_smi in candidates_smi:
+            out = mol_transform(c_smi)
+            if isinstance(out, np.ndarray):
+                out = torch.as_tensor(out, dtype=dtype)
+            candidate_transformed.append(out)
+    else:
+        candidate_transformed = candidates_smi
+    # Compute candidate labels.
+    candidate_labels = []
+    for c_smi in candidates_smi:
+        candidate_labels.append(mol_label_transform(c_smi) == query_label)
+    if not any(candidate_labels):
+        raise ValueError(f"Query molecule {smi} not found among its candidates during precomputation.")
+    return idx, {
+        "mol": query_fp,
+        "candidates": candidate_transformed,
+        "labels": candidate_labels,
+        "candidates_smiles": candidates_smi
+    }
+
+
+
 class MSnRetrievalDataset(MSnDataset):
     """
-    Extension of MSnDataset that also loads a dictionary of candidate molecules
-    for each item['smiles'] so we can perform retrieval tasks.
+    Extension of MSnDataset that also loads a dictionary of candidate molecules for each item['smiles']
+    so we can perform retrieval tasks.
 
     For each valid index (i.e. where candidate SMILES exist), the following are precomputed:
       - "mol": the transformed query molecule (e.g. its fingerprint)
@@ -1164,21 +1222,17 @@ class MSnRetrievalDataset(MSnDataset):
         super().__init__(**kwargs)
         self.mol_label_transform = mol_label_transform
 
-        # Load the candidate SMILES from JSON.
+        # Load candidate SMILES from JSON.
         if candidates_pth is None:
-            self.candidates_pth = utils.hugging_face_download(
-                "molecules/MassSpecGym_retrieval_candidates_mass.json"
-            )
+            self.candidates_pth = utils.hugging_face_download("molecules/MassSpecGym_retrieval_candidates_mass.json")
         elif candidates_pth == 'bonus':
-            self.candidates_pth = utils.hugging_face_download(
-                "molecules/MassSpecGym_retrieval_candidates_formula.json"
-            )
+            self.candidates_pth = utils.hugging_face_download("molecules/MassSpecGym_retrieval_candidates_formula.json")
         else:
             self.candidates_pth = Path(candidates_pth)
-        with open(self.candidates_pth, "r") as file:
-            self.candidates_dict = json.load(file)
+        with open(self.candidates_pth, "r") as f:
+            self.candidates_dict = json.load(f)
 
-        # Filter valid indices: only keep those indices for which a candidate exists.
+        # Filter valid indices: only keep indices for which candidate SMILES exist.
         valid_indices = []
         for idx, smi in enumerate(self.smiles):
             if smi in self.candidates_dict:
@@ -1197,44 +1251,19 @@ class MSnRetrievalDataset(MSnDataset):
         print(f"Total valid indices: {len(self.valid_indices)}")
         print(f"MSnRetrievalDataset length: {len(self)}")
 
-        # Precompute candidate-side transformations for each valid index.
-        # This caches the expensive operations so that __getitem__ is fast.
+        # Precompute candidate-side transformations in parallel.
         self.precomputed = {}
+        num_workers = max(os.cpu_count() - 2, 1)
+        print(f"Using {num_workers} processes for precomputation.")
+        # Prepare arguments for each valid index.
+        args_list = []
         for idx in self.valid_indices:
-            smi = self.smiles[idx]
-            # Compute the query's label (using mol_label_transform)
-            query_label = self.mol_label_transform(smi)
-            # Compute transformed query representation if a mol_transform is provided.
-            if self.mol_transform:
-                query_fp = self.mol_transform(smi)
-                if isinstance(query_fp, np.ndarray):
-                    query_fp = torch.as_tensor(query_fp, dtype=self.dtype)
-            else:
-                query_fp = smi  # fallback (unlikely)
-            # Get candidate SMILES.
-            candidates_smi = self.candidates_dict[smi]
-            # Precompute candidate transformations.
-            candidate_transformed = []
-            if self.mol_transform:
-                for c_smi in candidates_smi:
-                    out = self.mol_transform(c_smi)
-                    if isinstance(out, np.ndarray):
-                        out = torch.as_tensor(out, dtype=self.dtype)
-                    candidate_transformed.append(out)
-            else:
-                candidate_transformed = candidates_smi
-            # Precompute candidate labels.
-            candidate_labels = []
-            for c_smi in candidates_smi:
-                candidate_labels.append(self.mol_label_transform(c_smi) == query_label)
-            if not any(candidate_labels):
-                raise ValueError(f"Query molecule {smi} not found among its candidates during precomputation.")
-            self.precomputed[idx] = {
-                "mol": query_fp,
-                "candidates": candidate_transformed,
-                "labels": candidate_labels,
-                "candidates_smiles": candidates_smi
-            }
+            args_list.append((idx, self.smiles, self.candidates_dict, self.mol_transform, self.mol_label_transform, self.dtype))
+        with multiprocessing.Pool(processes=num_workers) as pool:
+            results = pool.map(_precompute_for_index, args_list)
+        # Store precomputed results in a dictionary keyed by the valid index.
+        for idx, pre in results:
+            self.precomputed[idx] = pre
 
     def __len__(self):
         return len(self.valid_indices)
@@ -1258,9 +1287,10 @@ class MSnRetrievalDataset(MSnDataset):
         return item
 
     @staticmethod
+    @profile_function
     def collate_fn(batch: T.Iterable[dict]) -> dict:
         collated_batch = {}
-        # Collate the PyG batch.
+        # Collate the PyG graphs.
         spec_list = [item["spec"] for item in batch]
         spec_batch = Batch.from_data_list(spec_list)
         collated_batch["spec"] = spec_batch
@@ -1271,7 +1301,7 @@ class MSnRetrievalDataset(MSnDataset):
             mol_list = torch.stack(mol_list, dim=0)
         collated_batch["mol"] = mol_list
 
-        # Collate any additional scalar fields.
+        # Collate additional scalar fields.
         for k in batch[0].keys():
             if k not in {"spec", "mol", "candidates", "labels", "candidates_smiles"}:
                 collated_batch[k] = default_collate([item[k] for item in batch])
