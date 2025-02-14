@@ -1254,7 +1254,7 @@ class MSnRetrievalDataset(MSnDataset):
         # Precompute candidate-side transformations in parallel.
         self.precomputed = {}
         allocated_cpus = int(os.environ.get("SLURM_CPUS_ON_NODE", os.cpu_count()))
-        num_workers = max(allocated_cpus - 2, 1)
+        num_workers = max(allocated_cpus - 8, 1)
         print(f"Using {num_workers} processes for precomputation.")
 
         # Prepare arguments for each valid index.
