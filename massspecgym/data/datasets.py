@@ -857,70 +857,70 @@ class MSnDataset(MassSpecDataset):
             # If no mol_transform is provided, return the SMILES string
             return smi
 
-class MSnRetrievalDataset(MSnDataset):
-    """
-    Extension of MSnDataset that also loads a dictionary of candidate molecules
-    for each item['smiles'], so we can do retrieval tasks.
-
-    The collated batch includes:
-      - 'spec' : DataBatch of PyG
-      - 'mol'  : [batch_size, fp_size] or list if string-based
-      - 'candidates' : [sum_of_candidates_in_batch, fp_size]
-      - 'labels' : 1D bool of length sum_of_candidates_in_batch
-      - 'batch_ptr': #candidates per item, shape [batch_size]
-      - 'candidates_smiles': list of length sum_of_candidates_in_batch
-    """
-
-    def __init__(
-        self,
-        mol_label_transform: MolTransform = MolToInChIKey(),
-        candidates_pth: T.Optional[T.Union[Path, str]] = None,
-        **kwargs,
-    ):
-        super().__init__(**kwargs)
-
-        self.mol_label_transform = mol_label_transform
-
-        # Load the candidate SMILES from JSON
-        if candidates_pth is None:
-            self.candidates_pth = utils.hugging_face_download(
-                "molecules/MassSpecGym_retrieval_candidates_mass.json"
-            )
-        elif candidates_pth == 'bonus':
-            self.candidates_pth = utils.hugging_face_download(
-                "molecules/MassSpecGym_retrieval_candidates_formula.json"
-            )
-        else:
-            self.candidates_pth = Path(candidates_pth)
-
-        with open(self.candidates_pth, "r") as file:
-            all_candidates_dict = json.load(file)
-
-        # Filter out only those indices for which we have candidate SMILES
-        valid_indices = []
-        skipped = 0
-        for idx, smi in enumerate(self.smiles):
-            if smi in all_candidates_dict:
-                valid_indices.append(idx)
-            else:
-                skipped += 1
-        print(f"Warning: No candidates for {skipped} SMILES. Skipping them.")
-
-        self.valid_indices = valid_indices
-        self.candidates_dict = all_candidates_dict
-
-        # Re‑map root_identifier_to_index so that only valid indices remain
-        new_map = {}
-        for new_i, old_i in enumerate(valid_indices):
-            rid = self.trees[old_i].root.spectrum.get('identifier')
-            new_map[rid] = new_i
-        self.root_identifier_to_index = new_map
-
-        print(f"Total valid indices: {len(self.valid_indices)}")
-        print(f"MSnRetrievalDataset length: {len(self)}")
-
-    def __len__(self):
-        return len(self.valid_indices)
+# class MSnRetrievalDataset(MSnDataset):
+#     """
+#     Extension of MSnDataset that also loads a dictionary of candidate molecules
+#     for each item['smiles'], so we can do retrieval tasks.
+#
+#     The collated batch includes:
+#       - 'spec' : DataBatch of PyG
+#       - 'mol'  : [batch_size, fp_size] or list if string-based
+#       - 'candidates' : [sum_of_candidates_in_batch, fp_size]
+#       - 'labels' : 1D bool of length sum_of_candidates_in_batch
+#       - 'batch_ptr': #candidates per item, shape [batch_size]
+#       - 'candidates_smiles': list of length sum_of_candidates_in_batch
+#     """
+#
+#     def __init__(
+#         self,
+#         mol_label_transform: MolTransform = MolToInChIKey(),
+#         candidates_pth: T.Optional[T.Union[Path, str]] = None,
+#         **kwargs,
+#     ):
+#         super().__init__(**kwargs)
+#
+#         self.mol_label_transform = mol_label_transform
+#
+#         # Load the candidate SMILES from JSON
+#         if candidates_pth is None:
+#             self.candidates_pth = utils.hugging_face_download(
+#                 "molecules/MassSpecGym_retrieval_candidates_mass.json"
+#             )
+#         elif candidates_pth == 'bonus':
+#             self.candidates_pth = utils.hugging_face_download(
+#                 "molecules/MassSpecGym_retrieval_candidates_formula.json"
+#             )
+#         else:
+#             self.candidates_pth = Path(candidates_pth)
+#
+#         with open(self.candidates_pth, "r") as file:
+#             all_candidates_dict = json.load(file)
+#
+#         # Filter out only those indices for which we have candidate SMILES
+#         valid_indices = []
+#         skipped = 0
+#         for idx, smi in enumerate(self.smiles):
+#             if smi in all_candidates_dict:
+#                 valid_indices.append(idx)
+#             else:
+#                 skipped += 1
+#         print(f"Warning: No candidates for {skipped} SMILES. Skipping them.")
+#
+#         self.valid_indices = valid_indices
+#         self.candidates_dict = all_candidates_dict
+#
+#         # Re‑map root_identifier_to_index so that only valid indices remain
+#         new_map = {}
+#         for new_i, old_i in enumerate(valid_indices):
+#             rid = self.trees[old_i].root.spectrum.get('identifier')
+#             new_map[rid] = new_i
+#         self.root_identifier_to_index = new_map
+#
+#         print(f"Total valid indices: {len(self.valid_indices)}")
+#         print(f"MSnRetrievalDataset length: {len(self)}")
+#
+#     def __len__(self):
+#         return len(self.valid_indices)
 
     # @profile_function
     # def __getitem__(self, idx: int) -> dict:
@@ -968,168 +968,445 @@ class MSnRetrievalDataset(MSnDataset):
     #         item["candidates"] = candidates_smi
     #
     #     return item
+    # @profile_function
+    # def __getitem__(self, idx: int) -> dict:
+    #     t0 = time.perf_counter()
+    #     # Map to the "true" index in the underlying MSnDataset
+    #     real_idx = self.valid_indices[idx]
+    #     t1 = time.perf_counter()
+    #
+    #     # Get base item from the parent class
+    #     item = super().__getitem__(real_idx)
+    #     t2 = time.perf_counter()
+    #
+    #     # Retrieve the true SMILES for this index
+    #     smi = self.smiles[real_idx]
+    #     t3 = time.perf_counter()
+    #     item["smiles"] = smi
+    #     t4 = time.perf_counter()
+    #
+    #     # Build the candidate list from the candidates dictionary
+    #     candidates_smi = self.candidates_dict[smi]
+    #     t5 = time.perf_counter()
+    #     item["candidates_smiles"] = candidates_smi
+    #     t6 = time.perf_counter()
+    #
+    #     # Compute query label
+    #     item_label = self.mol_label_transform(smi)
+    #     t7 = time.perf_counter()
+    #
+    #     # Build candidate labels list
+    #     candidate_labels = []
+    #     for c_smi in candidates_smi:
+    #         t_label0 = time.perf_counter()
+    #         candidate_labels.append(self.mol_label_transform(c_smi) == item_label)
+    #         t_label1 = time.perf_counter()
+    #         # Print each candidate label transform timing if desired:
+    #         # print(f"Candidate label transform: {(t_label1-t_label0)*1000:.2f} ms")
+    #     t8 = time.perf_counter()
+    #     item["labels"] = candidate_labels
+    #     if not any(item["labels"]):
+    #         raise ValueError(f"Query molecule {smi} not found in candidates.")
+    #     t9 = time.perf_counter()
+    #
+    #     # If a molecule transform is provided, transform query and candidates
+    #     if self.mol_transform:
+    #         # Transform query molecule
+    #         t_query0 = time.perf_counter()
+    #         query_fp = self.mol_transform(smi)
+    #         t_query1 = time.perf_counter()
+    #         if isinstance(query_fp, np.ndarray):
+    #             query_fp = torch.as_tensor(query_fp, dtype=self.dtype)
+    #         t_query2 = time.perf_counter()
+    #         item["mol"] = query_fp
+    #         t_query3 = time.perf_counter()
+    #
+    #         # Transform each candidate in a loop
+    #         candidates_fp = []
+    #         t_candidates_start = time.perf_counter()
+    #         candidate_loop_times = []
+    #         for c_smi in candidates_smi:
+    #             t_iter0 = time.perf_counter()
+    #             out = self.mol_transform(c_smi)
+    #             t_iter1 = time.perf_counter()
+    #             if isinstance(out, np.ndarray):
+    #                 out = torch.as_tensor(out, dtype=self.dtype)
+    #             t_iter2 = time.perf_counter()
+    #             candidates_fp.append(out)
+    #             candidate_loop_times.append((t_iter1 - t_iter0, t_iter2 - t_iter1))
+    #         t_candidates_end = time.perf_counter()
+    #         item["candidates"] = candidates_fp
+    #         t_candidates_total = t_candidates_end - t_candidates_start
+    #
+    #         # Print detailed candidate loop timing summary:
+    #         avg_transform = sum(x for x, _ in candidate_loop_times) / len(candidate_loop_times)
+    #         avg_tensor = sum(y for _, y in candidate_loop_times) / len(candidate_loop_times)
+    #         print(f"Candidate loop total: {t_candidates_total*1000:.2f} ms, "
+    #               f"avg transform: {avg_transform*1000:.2f} ms, avg tensor conversion: {avg_tensor*1000:.2f} ms")
+    #         t_final = time.perf_counter()
+    #     else:
+    #         item["candidates"] = candidates_smi
+    #         t_final = time.perf_counter()
+    #
+    #     # Print overall breakdown for __getitem__
+    #     print(f"__getitem__ timing breakdown for idx {idx}:")
+    #     print(f"  Map valid index: {(t1-t0)*1000:.2f} ms")
+    #     print(f"  Parent __getitem__: {(t2-t1)*1000:.2f} ms")
+    #     print(f"  Retrieve smi: {(t3-t2)*1000:.2f} ms")
+    #     print(f"  Set smi in item: {(t4-t3)*1000:.2f} ms")
+    #     print(f"  Candidate lookup: {(t5-t4)*1000:.2f} ms")
+    #     print(f"  Set candidates_smiles: {(t6-t5)*1000:.2f} ms")
+    #     print(f"  Mol label transform (query): {(t7-t6)*1000:.2f} ms")
+    #     print(f"  Build candidate labels: {(t8-t7)*1000:.2f} ms")
+    #     print(f"  Label check: {(t9-t8)*1000:.2f} ms")
+    #     if self.mol_transform:
+    #         print(f"  Mol transform on query: {(t_query1-t_query0)*1000:.2f} ms")
+    #         print(f"  Tensor conversion on query: {(t_query2-t_query1)*1000:.2f} ms")
+    #         print(f"  Set query mol: {(t_query3-t_query2)*1000:.2f} ms")
+    #         print(f"  Candidate loop total: {t_candidates_total*1000:.2f} ms")
+    #     print(f"  Total __getitem__: {(t_final-t0)*1000:.2f} ms")
+    #     return item
+    #
+    #
+    #
+    # @staticmethod
+    # @profile_function
+    # def collate_fn(batch: T.Iterable[dict]) -> dict:
+    #     """
+    #     Collate a batch of retrieval data:
+    #       - spec -> single DataBatch
+    #       - mol  -> stacked if Tensors
+    #       - candidates -> stacked (2D)
+    #       - labels -> 1D flatten
+    #       - batch_ptr -> #candidates per item
+    #       - candidates_smiles -> big list
+    #     """
+    #     # 1) Collate the PyG specs
+    #     spec_list = [d["spec"] for d in batch]
+    #     spec_batch = Batch.from_data_list(spec_list)
+    #
+    #     # 2) Collate the 'mol'
+    #     mol_list = [d["mol"] for d in batch]
+    #     # If these are Tensors, stack them
+    #     if isinstance(mol_list[0], torch.Tensor):
+    #         mol_list = torch.stack(mol_list, dim=0)
+    #
+    #     collated_batch = {
+    #         "spec": spec_batch,
+    #         "mol":  mol_list
+    #     }
+    #
+    #     # 3) Collate numeric/scalar metadata with default_collate
+    #     skip_keys = {"spec", "mol", "candidates", "labels", "candidates_smiles"}
+    #     for k in batch[0].keys():
+    #         if k not in skip_keys:
+    #             collated_batch[k] = default_collate([item[k] for item in batch])
+    #
+    #     # 4) Flatten the candidates
+    #     all_candidates = []
+    #     for d in batch:
+    #         # each d["candidates"] is a list of Tensors or strings
+    #         # If it's a Tensor, shape might be [fp_size]
+    #         # We'll gather them into all_candidates
+    #         for c in d["candidates"]:
+    #             if isinstance(c, torch.Tensor):
+    #                 all_candidates.append(c)
+    #             else:
+    #                 # If string, store them as well (unusual for retrieval though)
+    #                 all_candidates.append(c)
+    #
+    #     # If your candidates are Tensors, do a stack
+    #     if isinstance(all_candidates[0], torch.Tensor):
+    #         all_candidates = torch.stack(all_candidates, dim=0)
+    #
+    #     collated_batch["candidates"] = all_candidates
+    #
+    #     # 5) Flatten the labels
+    #     # item["labels"] is a python list of bool for each candidate
+    #     all_labels = sum([d["labels"] for d in batch], start=[])
+    #     collated_batch["labels"] = torch.as_tensor(all_labels, dtype=torch.bool)
+    #
+    #     # 6) batch_ptr: how many candidates per item
+    #     lens = [len(d["candidates"]) for d in batch]
+    #     collated_batch["batch_ptr"] = torch.as_tensor(lens, dtype=torch.int)
+    #
+    #     # 7) Flatten candidates_smiles
+    #     all_cand_smi = sum([d["candidates_smiles"] for d in batch], start=[])
+    #     collated_batch["candidates_smiles"] = all_cand_smi
+    #
+    #     return collated_batch
+
+class MSnRetrievalDataset(MSnDataset):
+    """
+    Extension of MSnDataset that also loads a dictionary of candidate molecules
+    for each item['smiles'] so we can perform retrieval tasks.
+
+    For each valid index (i.e. where candidate SMILES exist), the following are precomputed:
+      - "mol": the transformed query molecule (e.g. its fingerprint)
+      - "candidates": a list of transformed candidate representations
+      - "labels": a list of booleans indicating if each candidate matches the query
+      - "candidates_smiles": the original candidate SMILES list
+
+    The collated batch will include:
+      - 'spec' : DataBatch of PyG graphs
+      - 'mol'  : tensor of shape [batch_size, fp_size]
+      - 'candidates' : tensor of shape [sum(candidates per item), fp_size]
+      - 'labels' : 1D tensor of booleans for all candidates
+      - 'batch_ptr': tensor of candidate counts per item
+      - 'candidates_smiles': list of candidate SMILES
+    """
+    def __init__(
+        self,
+        mol_label_transform: T.Callable = MolToInChIKey(),
+        candidates_pth: T.Optional[T.Union[Path, str]] = None,
+        **kwargs,
+    ):
+        super().__init__(**kwargs)
+        self.mol_label_transform = mol_label_transform
+
+        # Load the candidate SMILES from JSON.
+        if candidates_pth is None:
+            self.candidates_pth = utils.hugging_face_download(
+                "molecules/MassSpecGym_retrieval_candidates_mass.json"
+            )
+        elif candidates_pth == 'bonus':
+            self.candidates_pth = utils.hugging_face_download(
+                "molecules/MassSpecGym_retrieval_candidates_formula.json"
+            )
+        else:
+            self.candidates_pth = Path(candidates_pth)
+        with open(self.candidates_pth, "r") as file:
+            self.candidates_dict = json.load(file)
+
+        # Filter valid indices: only keep those indices for which a candidate exists.
+        valid_indices = []
+        for idx, smi in enumerate(self.smiles):
+            if smi in self.candidates_dict:
+                valid_indices.append(idx)
+            else:
+                print(f"Warning: No candidates for SMILES {smi} (index {idx}); skipping.")
+        self.valid_indices = valid_indices
+
+        # Re-map root_identifier_to_index for valid indices.
+        new_map = {}
+        for new_i, old_i in enumerate(valid_indices):
+            rid = self.trees[old_i].root.spectrum.get('identifier')
+            new_map[rid] = new_i
+        self.root_identifier_to_index = new_map
+
+        print(f"Total valid indices: {len(self.valid_indices)}")
+        print(f"MSnRetrievalDataset length: {len(self)}")
+
+        # Precompute candidate-side transformations for each valid index.
+        # This caches the expensive operations so that __getitem__ is fast.
+        self.precomputed = {}
+        for idx in self.valid_indices:
+            smi = self.smiles[idx]
+            # Compute the query's label (using mol_label_transform)
+            query_label = self.mol_label_transform(smi)
+            # Compute transformed query representation if a mol_transform is provided.
+            if self.mol_transform:
+                query_fp = self.mol_transform(smi)
+                if isinstance(query_fp, np.ndarray):
+                    query_fp = torch.as_tensor(query_fp, dtype=self.dtype)
+            else:
+                query_fp = smi  # fallback (unlikely)
+            # Get candidate SMILES.
+            candidates_smi = self.candidates_dict[smi]
+            # Precompute candidate transformations.
+            candidate_transformed = []
+            if self.mol_transform:
+                for c_smi in candidates_smi:
+                    out = self.mol_transform(c_smi)
+                    if isinstance(out, np.ndarray):
+                        out = torch.as_tensor(out, dtype=self.dtype)
+                    candidate_transformed.append(out)
+            else:
+                candidate_transformed = candidates_smi
+            # Precompute candidate labels.
+            candidate_labels = []
+            for c_smi in candidates_smi:
+                candidate_labels.append(self.mol_label_transform(c_smi) == query_label)
+            if not any(candidate_labels):
+                raise ValueError(f"Query molecule {smi} not found among its candidates during precomputation.")
+            self.precomputed[idx] = {
+                "mol": query_fp,
+                "candidates": candidate_transformed,
+                "labels": candidate_labels,
+                "candidates_smiles": candidates_smi
+            }
+
+    def __len__(self):
+        return len(self.valid_indices)
+
+    # @profile_function
+    # def __getitem__(self, idx: int) -> dict:
+    #     # Map to the actual index in the underlying dataset.
+    #     real_idx = self.valid_indices[idx]
+    #     # Get the base item (e.g., 'spec', 'precursor_mz', etc.) from the parent.
+    #     item = super().__getitem__(real_idx)
+    #     # Set the query SMILES.
+    #     smi = self.smiles[real_idx]
+    #     item["smiles"] = smi
+    #     # Also include the original candidate SMILES.
+    #     item["candidates_smiles"] = self.candidates_dict[smi]
+    #     # Retrieve precomputed values.
+    #     pre = self.precomputed[real_idx]
+    #     item["mol"] = pre["mol"]
+    #     item["candidates"] = pre["candidates"]
+    #     item["labels"] = pre["labels"]
+    #     return item
+    #
+    # @staticmethod
+    # def collate_fn(batch: T.Iterable[dict]) -> dict:
+    #     collated_batch = {}
+    #     # Collate the PyG batch.
+    #     spec_list = [item["spec"] for item in batch]
+    #     spec_batch = Batch.from_data_list(spec_list)
+    #     collated_batch["spec"] = spec_batch
+    #
+    #     # Collate the transformed query molecules.
+    #     mol_list = [item["mol"] for item in batch]
+    #     if isinstance(mol_list[0], torch.Tensor):
+    #         mol_list = torch.stack(mol_list, dim=0)
+    #     collated_batch["mol"] = mol_list
+    #
+    #     # Collate any additional scalar fields.
+    #     for k in batch[0].keys():
+    #         if k not in {"spec", "mol", "candidates", "labels", "candidates_smiles"}:
+    #             collated_batch[k] = default_collate([item[k] for item in batch])
+    #
+    #     # For candidates, flatten the lists and stack if tensors.
+    #     all_candidates = []
+    #     for item in batch:
+    #         for cand in item["candidates"]:
+    #             all_candidates.append(cand)
+    #     if isinstance(all_candidates[0], torch.Tensor):
+    #         all_candidates = torch.stack(all_candidates, dim=0)
+    #     collated_batch["candidates"] = all_candidates
+    #
+    #     # Flatten candidate labels.
+    #     all_labels = sum([item["labels"] for item in batch], start=[])
+    #     collated_batch["labels"] = torch.as_tensor(all_labels, dtype=torch.bool)
+    #
+    #     # Build batch_ptr (number of candidates per item).
+    #     batch_ptr = [len(item["candidates"]) for item in batch]
+    #     collated_batch["batch_ptr"] = torch.as_tensor(batch_ptr, dtype=torch.int)
+    #
+    #     # Concatenate candidate SMILES.
+    #     all_cand_smiles = sum([item["candidates_smiles"] for item in batch], start=[])
+    #     collated_batch["candidates_smiles"] = all_cand_smiles
+    #
+    #     return collated_batch
+
     @profile_function
     def __getitem__(self, idx: int) -> dict:
         t0 = time.perf_counter()
-        # Map to the "true" index in the underlying MSnDataset
+        # Map to the actual index.
         real_idx = self.valid_indices[idx]
         t1 = time.perf_counter()
-
-        # Get base item from the parent class
+        # Get base item from parent.
         item = super().__getitem__(real_idx)
         t2 = time.perf_counter()
-
-        # Retrieve the true SMILES for this index
+        # Retrieve the true SMILES.
         smi = self.smiles[real_idx]
         t3 = time.perf_counter()
         item["smiles"] = smi
         t4 = time.perf_counter()
-
-        # Build the candidate list from the candidates dictionary
-        candidates_smi = self.candidates_dict[smi]
+        # Include the original candidate SMILES.
+        item["candidates_smiles"] = self.candidates_dict[smi]
         t5 = time.perf_counter()
-        item["candidates_smiles"] = candidates_smi
+        # Retrieve precomputed values.
+        pre = self.precomputed[real_idx]
         t6 = time.perf_counter()
-
-        # Compute query label
-        item_label = self.mol_label_transform(smi)
+        item["mol"] = pre["mol"]
         t7 = time.perf_counter()
-
-        # Build candidate labels list
-        candidate_labels = []
-        for c_smi in candidates_smi:
-            t_label0 = time.perf_counter()
-            candidate_labels.append(self.mol_label_transform(c_smi) == item_label)
-            t_label1 = time.perf_counter()
-            # Print each candidate label transform timing if desired:
-            # print(f"Candidate label transform: {(t_label1-t_label0)*1000:.2f} ms")
+        item["candidates"] = pre["candidates"]
         t8 = time.perf_counter()
-        item["labels"] = candidate_labels
-        if not any(item["labels"]):
-            raise ValueError(f"Query molecule {smi} not found in candidates.")
+        item["labels"] = pre["labels"]
         t9 = time.perf_counter()
-
-        # If a molecule transform is provided, transform query and candidates
-        if self.mol_transform:
-            # Transform query molecule
-            t_query0 = time.perf_counter()
-            query_fp = self.mol_transform(smi)
-            t_query1 = time.perf_counter()
-            if isinstance(query_fp, np.ndarray):
-                query_fp = torch.as_tensor(query_fp, dtype=self.dtype)
-            t_query2 = time.perf_counter()
-            item["mol"] = query_fp
-            t_query3 = time.perf_counter()
-
-            # Transform each candidate in a loop
-            candidates_fp = []
-            t_candidates_start = time.perf_counter()
-            candidate_loop_times = []
-            for c_smi in candidates_smi:
-                t_iter0 = time.perf_counter()
-                out = self.mol_transform(c_smi)
-                t_iter1 = time.perf_counter()
-                if isinstance(out, np.ndarray):
-                    out = torch.as_tensor(out, dtype=self.dtype)
-                t_iter2 = time.perf_counter()
-                candidates_fp.append(out)
-                candidate_loop_times.append((t_iter1 - t_iter0, t_iter2 - t_iter1))
-            t_candidates_end = time.perf_counter()
-            item["candidates"] = candidates_fp
-            t_candidates_total = t_candidates_end - t_candidates_start
-
-            # Print detailed candidate loop timing summary:
-            avg_transform = sum(x for x, _ in candidate_loop_times) / len(candidate_loop_times)
-            avg_tensor = sum(y for _, y in candidate_loop_times) / len(candidate_loop_times)
-            print(f"Candidate loop total: {t_candidates_total*1000:.2f} ms, "
-                  f"avg transform: {avg_transform*1000:.2f} ms, avg tensor conversion: {avg_tensor*1000:.2f} ms")
-            t_final = time.perf_counter()
-        else:
-            item["candidates"] = candidates_smi
-            t_final = time.perf_counter()
-
-        # Print overall breakdown for __getitem__
         print(f"__getitem__ timing breakdown for idx {idx}:")
         print(f"  Map valid index: {(t1-t0)*1000:.2f} ms")
         print(f"  Parent __getitem__: {(t2-t1)*1000:.2f} ms")
-        print(f"  Retrieve smi: {(t3-t2)*1000:.2f} ms")
-        print(f"  Set smi in item: {(t4-t3)*1000:.2f} ms")
-        print(f"  Candidate lookup: {(t5-t4)*1000:.2f} ms")
-        print(f"  Set candidates_smiles: {(t6-t5)*1000:.2f} ms")
-        print(f"  Mol label transform (query): {(t7-t6)*1000:.2f} ms")
-        print(f"  Build candidate labels: {(t8-t7)*1000:.2f} ms")
-        print(f"  Label check: {(t9-t8)*1000:.2f} ms")
-        if self.mol_transform:
-            print(f"  Mol transform on query: {(t_query1-t_query0)*1000:.2f} ms")
-            print(f"  Tensor conversion on query: {(t_query2-t_query1)*1000:.2f} ms")
-            print(f"  Set query mol: {(t_query3-t_query2)*1000:.2f} ms")
-            print(f"  Candidate loop total: {t_candidates_total*1000:.2f} ms")
-        print(f"  Total __getitem__: {(t_final-t0)*1000:.2f} ms")
+        print(f"  Retrieve SMILES: {(t3-t2)*1000:.2f} ms")
+        print(f"  Set SMILES: {(t4-t3)*1000:.2f} ms")
+        print(f"  Set candidates_smiles: {(t5-t4)*1000:.2f} ms")
+        print(f"  Precomputed lookup: {(t6-t5)*1000:.2f} ms")
+        print(f"  Set query mol: {(t7-t6)*1000:.2f} ms")
+        print(f"  Set candidates: {(t8-t7)*1000:.2f} ms")
+        print(f"  Set labels: {(t9-t8)*1000:.2f} ms")
+        print(f"  Total __getitem__: {(t9-t0)*1000:.2f} ms")
         return item
 
     @staticmethod
     @profile_function
     def collate_fn(batch: T.Iterable[dict]) -> dict:
-        """
-        Collate a batch of retrieval data:
-          - spec -> single DataBatch
-          - mol  -> stacked if Tensors
-          - candidates -> stacked (2D)
-          - labels -> 1D flatten
-          - batch_ptr -> #candidates per item
-          - candidates_smiles -> big list
-        """
-        # 1) Collate the PyG specs
-        spec_list = [d["spec"] for d in batch]
+        t0 = time.perf_counter()
+        collated_batch = {}
+        t1 = time.perf_counter()
+        # Collate the PyG specs.
+        spec_list = [item["spec"] for item in batch]
+        t2 = time.perf_counter()
         spec_batch = Batch.from_data_list(spec_list)
-
-        # 2) Collate the 'mol'
-        mol_list = [d["mol"] for d in batch]
-        # If these are Tensors, stack them
+        t3 = time.perf_counter()
+        collated_batch["spec"] = spec_batch
+        t4 = time.perf_counter()
+        # Collate query molecules.
+        mol_list = [item["mol"] for item in batch]
+        t5 = time.perf_counter()
         if isinstance(mol_list[0], torch.Tensor):
             mol_list = torch.stack(mol_list, dim=0)
-
-        collated_batch = {
-            "spec": spec_batch,
-            "mol":  mol_list
-        }
-
-        # 3) Collate numeric/scalar metadata with default_collate
-        skip_keys = {"spec", "mol", "candidates", "labels", "candidates_smiles"}
+        t6 = time.perf_counter()
+        collated_batch["mol"] = mol_list
+        t7 = time.perf_counter()
+        # Collate any additional scalar fields.
         for k in batch[0].keys():
-            if k not in skip_keys:
+            if k not in {"spec", "mol", "candidates", "labels", "candidates_smiles"}:
                 collated_batch[k] = default_collate([item[k] for item in batch])
-
-        # 4) Flatten the candidates
+        t8 = time.perf_counter()
+        # Flatten candidates.
         all_candidates = []
-        for d in batch:
-            # each d["candidates"] is a list of Tensors or strings
-            # If it's a Tensor, shape might be [fp_size]
-            # We'll gather them into all_candidates
-            for c in d["candidates"]:
-                if isinstance(c, torch.Tensor):
-                    all_candidates.append(c)
-                else:
-                    # If string, store them as well (unusual for retrieval though)
-                    all_candidates.append(c)
-
-        # If your candidates are Tensors, do a stack
+        for item in batch:
+            for cand in item["candidates"]:
+                all_candidates.append(cand)
+        t9 = time.perf_counter()
         if isinstance(all_candidates[0], torch.Tensor):
             all_candidates = torch.stack(all_candidates, dim=0)
-
+        t10 = time.perf_counter()
         collated_batch["candidates"] = all_candidates
-
-        # 5) Flatten the labels
-        # item["labels"] is a python list of bool for each candidate
-        all_labels = sum([d["labels"] for d in batch], start=[])
+        t11 = time.perf_counter()
+        # Flatten candidate labels.
+        all_labels = sum([item["labels"] for item in batch], start=[])
+        t12 = time.perf_counter()
         collated_batch["labels"] = torch.as_tensor(all_labels, dtype=torch.bool)
-
-        # 6) batch_ptr: how many candidates per item
-        lens = [len(d["candidates"]) for d in batch]
-        collated_batch["batch_ptr"] = torch.as_tensor(lens, dtype=torch.int)
-
-        # 7) Flatten candidates_smiles
-        all_cand_smi = sum([d["candidates_smiles"] for d in batch], start=[])
-        collated_batch["candidates_smiles"] = all_cand_smi
-
+        t13 = time.perf_counter()
+        # Build batch_ptr (number of candidates per item).
+        batch_ptr = [len(item["candidates"]) for item in batch]
+        t14 = time.perf_counter()
+        collated_batch["batch_ptr"] = torch.as_tensor(batch_ptr, dtype=torch.int)
+        t15 = time.perf_counter()
+        # Concatenate candidate SMILES.
+        all_cand_smiles = sum([item["candidates_smiles"] for item in batch], start=[])
+        t16 = time.perf_counter()
+        collated_batch["candidates_smiles"] = all_cand_smiles
+        t17 = time.perf_counter()
+        print("collate_fn timing breakdown:")
+        print(f"  Init collated batch: {(t1-t0)*1000:.2f} ms")
+        print(f"  Build spec list: {(t2-t1)*1000:.2f} ms")
+        print(f"  PyG Batch creation: {(t3-t2)*1000:.2f} ms")
+        print(f"  Set spec: {(t4-t3)*1000:.2f} ms")
+        print(f"  Build mol list: {(t5-t4)*1000:.2f} ms")
+        print(f"  Stack mol: {(t6-t5)*1000:.2f} ms")
+        print(f"  Set mol: {(t7-t6)*1000:.2f} ms")
+        print(f"  Collate additional fields: {(t8-t7)*1000:.2f} ms")
+        print(f"  Build candidate list: {(t9-t8)*1000:.2f} ms")
+        print(f"  Stack candidates: {(t10-t9)*1000:.2f} ms")
+        print(f"  Set candidates: {(t11-t10)*1000:.2f} ms")
+        print(f"  Build labels: {(t12-t11)*1000:.2f} ms")
+        print(f"  Set labels: {(t13-t12)*1000:.2f} ms")
+        print(f"  Build batch_ptr: {(t14-t13)*1000:.2f} ms")
+        print(f"  Set batch_ptr: {(t15-t14)*1000:.2f} ms")
+        print(f"  Build candidates_smiles: {(t16-t15)*1000:.2f} ms")
+        print(f"  Set candidates_smiles: {(t17-t16)*1000:.2f} ms")
+        print(f"  Total collate_fn: {(t17-t0)*1000:.2f} ms")
         return collated_batch
