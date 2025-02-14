@@ -1138,6 +1138,9 @@ class MSnDataset(MassSpecDataset):
 
 import multiprocessing
 import os
+
+import torch.multiprocessing as mp
+mp.set_sharing_strategy('file_system')
 def _precompute_for_index(args):
     """
     Precompute candidate transformations and labels for a single valid index.
