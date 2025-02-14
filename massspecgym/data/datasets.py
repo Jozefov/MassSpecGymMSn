@@ -20,6 +20,21 @@ from massspecgym.featurize import SpectrumFeaturizer
 from massspecgym.data.transforms import SpecTransform, MolTransform, MolToInChIKey
 from massspecgym.tools.data import compute_root_mol_freq
 
+import time
+import functools
+
+def profile_function(func):
+    @functools.wraps(func)
+    def wrapper(*args, **kwargs):
+        start = time.perf_counter()
+        result = func(*args, **kwargs)
+        elapsed = time.perf_counter() - start
+        # Only print if time exceeds threshold (e.g., 0.001 seconds)
+        if elapsed > 0.001:
+            print(f"[PROFILE] {func.__name__} took {elapsed:.6f} seconds")
+        return result
+    return wrapper
+
 class MassSpecDataset(Dataset):
     """
     Dataset containing mass spectra and their corresponding molecular structures. This class is
@@ -82,6 +97,7 @@ class MassSpecDataset(Dataset):
     def __len__(self) -> int:
         return len(self.spectra)
 
+    @profile_function
     def __getitem__(
         self, i: int, transform_spec: bool = True, transform_mol: bool = True
     ) -> dict:
@@ -139,6 +155,8 @@ class MassSpecDataset(Dataset):
         return item
 
     @staticmethod
+    @staticmethod
+    @profile_function
     def collate_fn(batch: T.Iterable[dict]) -> dict:
         """
         Custom collate function to handle the outputs of __getitem__.
@@ -904,6 +922,7 @@ class MSnRetrievalDataset(MSnDataset):
     def __len__(self):
         return len(self.valid_indices)
 
+    @profile_function
     def __getitem__(self, idx: int) -> dict:
         # Map to the "true" index in the underlying MSnDataset
         real_idx = self.valid_indices[idx]
@@ -951,6 +970,7 @@ class MSnRetrievalDataset(MSnDataset):
         return item
 
     @staticmethod
+    @profile_function
     def collate_fn(batch: T.Iterable[dict]) -> dict:
         """
         Collate a batch of retrieval data:

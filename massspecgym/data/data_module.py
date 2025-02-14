@@ -11,7 +11,6 @@ from torch.utils.data.dataloader import DataLoader
 from massspecgym.data.datasets import MassSpecDataset, MSnDataset
 
 
-
 class MassSpecDataModule(pl.LightningDataModule):
     """
     Data module containing a mass spectrometry dataset. This class is responsible for loading, splitting, and wrapping
