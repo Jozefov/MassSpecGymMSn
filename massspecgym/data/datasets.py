@@ -921,154 +921,154 @@ class MSnDataset(MassSpecDataset):
 #
 #     def __len__(self):
 #         return len(self.valid_indices)
+#
+#     @profile_function
+#     def __getitem__(self, idx: int) -> dict:
+#         # Map to the "true" index in the underlying MSnDataset
+#         real_idx = self.valid_indices[idx]
+#
+#         # Use MSnDataset's __getitem__ to get spec, mol, etc.
+#         item = super().__getitem__(real_idx)
+#
+#         # This is the "true" SMILES we had at that index
+#         smi = self.smiles[real_idx]
+#         item["smiles"] = smi
+#
+#         # Build the candidate list
+#         candidates_smi = self.candidates_dict[smi]
+#         item["candidates_smiles"] = candidates_smi
+#
+#         # labels: True if candidate is the same as the query
+#         # We do this by matching InChIKey (or something) but here: mol_label_transform
+#         item_label = self.mol_label_transform(smi)
+#         item["labels"] = [
+#             (self.mol_label_transform(c_smi) == item_label)
+#             for c_smi in candidates_smi
+#         ]
+#         if not any(item["labels"]):
+#             raise ValueError(f"Query molecule not in candidates for {smi}.")
+#
+#         # Transform the *query* molecule again if needed (like your fingerprint)
+#         if self.mol_transform:
+#             query_fp = self.mol_transform(smi)
+#             if isinstance(query_fp, np.ndarray):
+#                 query_fp = torch.as_tensor(query_fp, dtype=self.dtype)
+#             item["mol"] = query_fp
+#
+#             # Transform each candidate
+#             candidates_fp = []
+#             for c_smi in candidates_smi:
+#                 out = self.mol_transform(c_smi)
+#                 if isinstance(out, np.ndarray):
+#                     out = torch.as_tensor(out, dtype=self.dtype)
+#                 candidates_fp.append(out)
+#             item["candidates"] = candidates_fp
+#         else:
+#             # If no transform, store as plain strings or something
+#             item["candidates"] = candidates_smi
+#
+#         return item
+#     @profile_function
+#     def __getitem__(self, idx: int) -> dict:
+#         t0 = time.perf_counter()
+#         # Map to the "true" index in the underlying MSnDataset
+#         real_idx = self.valid_indices[idx]
+#         t1 = time.perf_counter()
+#
+#         # Get base item from the parent class
+#         item = super().__getitem__(real_idx)
+#         t2 = time.perf_counter()
+#
+#         # Retrieve the true SMILES for this index
+#         smi = self.smiles[real_idx]
+#         t3 = time.perf_counter()
+#         item["smiles"] = smi
+#         t4 = time.perf_counter()
+#
+#         # Build the candidate list from the candidates dictionary
+#         candidates_smi = self.candidates_dict[smi]
+#         t5 = time.perf_counter()
+#         item["candidates_smiles"] = candidates_smi
+#         t6 = time.perf_counter()
+#
+#         # Compute query label
+#         item_label = self.mol_label_transform(smi)
+#         t7 = time.perf_counter()
+#
+#         # Build candidate labels list
+#         candidate_labels = []
+#         for c_smi in candidates_smi:
+#             t_label0 = time.perf_counter()
+#             candidate_labels.append(self.mol_label_transform(c_smi) == item_label)
+#             t_label1 = time.perf_counter()
+#             # Print each candidate label transform timing if desired:
+#             # print(f"Candidate label transform: {(t_label1-t_label0)*1000:.2f} ms")
+#         t8 = time.perf_counter()
+#         item["labels"] = candidate_labels
+#         if not any(item["labels"]):
+#             raise ValueError(f"Query molecule {smi} not found in candidates.")
+#         t9 = time.perf_counter()
+#
+#         # If a molecule transform is provided, transform query and candidates
+#         if self.mol_transform:
+#             # Transform query molecule
+#             t_query0 = time.perf_counter()
+#             query_fp = self.mol_transform(smi)
+#             t_query1 = time.perf_counter()
+#             if isinstance(query_fp, np.ndarray):
+#                 query_fp = torch.as_tensor(query_fp, dtype=self.dtype)
+#             t_query2 = time.perf_counter()
+#             item["mol"] = query_fp
+#             t_query3 = time.perf_counter()
+#
+#             # Transform each candidate in a loop
+#             candidates_fp = []
+#             t_candidates_start = time.perf_counter()
+#             candidate_loop_times = []
+#             for c_smi in candidates_smi:
+#                 t_iter0 = time.perf_counter()
+#                 out = self.mol_transform(c_smi)
+#                 t_iter1 = time.perf_counter()
+#                 if isinstance(out, np.ndarray):
+#                     out = torch.as_tensor(out, dtype=self.dtype)
+#                 t_iter2 = time.perf_counter()
+#                 candidates_fp.append(out)
+#                 candidate_loop_times.append((t_iter1 - t_iter0, t_iter2 - t_iter1))
+#             t_candidates_end = time.perf_counter()
+#             item["candidates"] = candidates_fp
+#             t_candidates_total = t_candidates_end - t_candidates_start
+#
+#             # Print detailed candidate loop timing summary:
+#             avg_transform = sum(x for x, _ in candidate_loop_times) / len(candidate_loop_times)
+#             avg_tensor = sum(y for _, y in candidate_loop_times) / len(candidate_loop_times)
+#             print(f"Candidate loop total: {t_candidates_total*1000:.2f} ms, "
+#                   f"avg transform: {avg_transform*1000:.2f} ms, avg tensor conversion: {avg_tensor*1000:.2f} ms")
+#             t_final = time.perf_counter()
+#         else:
+#             item["candidates"] = candidates_smi
+#             t_final = time.perf_counter()
+#
+#         # Print overall breakdown for __getitem__
+#         print(f"__getitem__ timing breakdown for idx {idx}:")
+#         print(f"  Map valid index: {(t1-t0)*1000:.2f} ms")
+#         print(f"  Parent __getitem__: {(t2-t1)*1000:.2f} ms")
+#         print(f"  Retrieve smi: {(t3-t2)*1000:.2f} ms")
+#         print(f"  Set smi in item: {(t4-t3)*1000:.2f} ms")
+#         print(f"  Candidate lookup: {(t5-t4)*1000:.2f} ms")
+#         print(f"  Set candidates_smiles: {(t6-t5)*1000:.2f} ms")
+#         print(f"  Mol label transform (query): {(t7-t6)*1000:.2f} ms")
+#         print(f"  Build candidate labels: {(t8-t7)*1000:.2f} ms")
+#         print(f"  Label check: {(t9-t8)*1000:.2f} ms")
+#         if self.mol_transform:
+#             print(f"  Mol transform on query: {(t_query1-t_query0)*1000:.2f} ms")
+#             print(f"  Tensor conversion on query: {(t_query2-t_query1)*1000:.2f} ms")
+#             print(f"  Set query mol: {(t_query3-t_query2)*1000:.2f} ms")
+#             print(f"  Candidate loop total: {t_candidates_total*1000:.2f} ms")
+#         print(f"  Total __getitem__: {(t_final-t0)*1000:.2f} ms")
+#         return item
 
-    # @profile_function
-    # def __getitem__(self, idx: int) -> dict:
-    #     # Map to the "true" index in the underlying MSnDataset
-    #     real_idx = self.valid_indices[idx]
-    #
-    #     # Use MSnDataset's __getitem__ to get spec, mol, etc.
-    #     item = super().__getitem__(real_idx)
-    #
-    #     # This is the "true" SMILES we had at that index
-    #     smi = self.smiles[real_idx]
-    #     item["smiles"] = smi
-    #
-    #     # Build the candidate list
-    #     candidates_smi = self.candidates_dict[smi]
-    #     item["candidates_smiles"] = candidates_smi
-    #
-    #     # labels: True if candidate is the same as the query
-    #     # We do this by matching InChIKey (or something) but here: mol_label_transform
-    #     item_label = self.mol_label_transform(smi)
-    #     item["labels"] = [
-    #         (self.mol_label_transform(c_smi) == item_label)
-    #         for c_smi in candidates_smi
-    #     ]
-    #     if not any(item["labels"]):
-    #         raise ValueError(f"Query molecule not in candidates for {smi}.")
-    #
-    #     # Transform the *query* molecule again if needed (like your fingerprint)
-    #     if self.mol_transform:
-    #         query_fp = self.mol_transform(smi)
-    #         if isinstance(query_fp, np.ndarray):
-    #             query_fp = torch.as_tensor(query_fp, dtype=self.dtype)
-    #         item["mol"] = query_fp
-    #
-    #         # Transform each candidate
-    #         candidates_fp = []
-    #         for c_smi in candidates_smi:
-    #             out = self.mol_transform(c_smi)
-    #             if isinstance(out, np.ndarray):
-    #                 out = torch.as_tensor(out, dtype=self.dtype)
-    #             candidates_fp.append(out)
-    #         item["candidates"] = candidates_fp
-    #     else:
-    #         # If no transform, store as plain strings or something
-    #         item["candidates"] = candidates_smi
-    #
-    #     return item
-    # @profile_function
-    # def __getitem__(self, idx: int) -> dict:
-    #     t0 = time.perf_counter()
-    #     # Map to the "true" index in the underlying MSnDataset
-    #     real_idx = self.valid_indices[idx]
-    #     t1 = time.perf_counter()
-    #
-    #     # Get base item from the parent class
-    #     item = super().__getitem__(real_idx)
-    #     t2 = time.perf_counter()
-    #
-    #     # Retrieve the true SMILES for this index
-    #     smi = self.smiles[real_idx]
-    #     t3 = time.perf_counter()
-    #     item["smiles"] = smi
-    #     t4 = time.perf_counter()
-    #
-    #     # Build the candidate list from the candidates dictionary
-    #     candidates_smi = self.candidates_dict[smi]
-    #     t5 = time.perf_counter()
-    #     item["candidates_smiles"] = candidates_smi
-    #     t6 = time.perf_counter()
-    #
-    #     # Compute query label
-    #     item_label = self.mol_label_transform(smi)
-    #     t7 = time.perf_counter()
-    #
-    #     # Build candidate labels list
-    #     candidate_labels = []
-    #     for c_smi in candidates_smi:
-    #         t_label0 = time.perf_counter()
-    #         candidate_labels.append(self.mol_label_transform(c_smi) == item_label)
-    #         t_label1 = time.perf_counter()
-    #         # Print each candidate label transform timing if desired:
-    #         # print(f"Candidate label transform: {(t_label1-t_label0)*1000:.2f} ms")
-    #     t8 = time.perf_counter()
-    #     item["labels"] = candidate_labels
-    #     if not any(item["labels"]):
-    #         raise ValueError(f"Query molecule {smi} not found in candidates.")
-    #     t9 = time.perf_counter()
-    #
-    #     # If a molecule transform is provided, transform query and candidates
-    #     if self.mol_transform:
-    #         # Transform query molecule
-    #         t_query0 = time.perf_counter()
-    #         query_fp = self.mol_transform(smi)
-    #         t_query1 = time.perf_counter()
-    #         if isinstance(query_fp, np.ndarray):
-    #             query_fp = torch.as_tensor(query_fp, dtype=self.dtype)
-    #         t_query2 = time.perf_counter()
-    #         item["mol"] = query_fp
-    #         t_query3 = time.perf_counter()
-    #
-    #         # Transform each candidate in a loop
-    #         candidates_fp = []
-    #         t_candidates_start = time.perf_counter()
-    #         candidate_loop_times = []
-    #         for c_smi in candidates_smi:
-    #             t_iter0 = time.perf_counter()
-    #             out = self.mol_transform(c_smi)
-    #             t_iter1 = time.perf_counter()
-    #             if isinstance(out, np.ndarray):
-    #                 out = torch.as_tensor(out, dtype=self.dtype)
-    #             t_iter2 = time.perf_counter()
-    #             candidates_fp.append(out)
-    #             candidate_loop_times.append((t_iter1 - t_iter0, t_iter2 - t_iter1))
-    #         t_candidates_end = time.perf_counter()
-    #         item["candidates"] = candidates_fp
-    #         t_candidates_total = t_candidates_end - t_candidates_start
-    #
-    #         # Print detailed candidate loop timing summary:
-    #         avg_transform = sum(x for x, _ in candidate_loop_times) / len(candidate_loop_times)
-    #         avg_tensor = sum(y for _, y in candidate_loop_times) / len(candidate_loop_times)
-    #         print(f"Candidate loop total: {t_candidates_total*1000:.2f} ms, "
-    #               f"avg transform: {avg_transform*1000:.2f} ms, avg tensor conversion: {avg_tensor*1000:.2f} ms")
-    #         t_final = time.perf_counter()
-    #     else:
-    #         item["candidates"] = candidates_smi
-    #         t_final = time.perf_counter()
-    #
-    #     # Print overall breakdown for __getitem__
-    #     print(f"__getitem__ timing breakdown for idx {idx}:")
-    #     print(f"  Map valid index: {(t1-t0)*1000:.2f} ms")
-    #     print(f"  Parent __getitem__: {(t2-t1)*1000:.2f} ms")
-    #     print(f"  Retrieve smi: {(t3-t2)*1000:.2f} ms")
-    #     print(f"  Set smi in item: {(t4-t3)*1000:.2f} ms")
-    #     print(f"  Candidate lookup: {(t5-t4)*1000:.2f} ms")
-    #     print(f"  Set candidates_smiles: {(t6-t5)*1000:.2f} ms")
-    #     print(f"  Mol label transform (query): {(t7-t6)*1000:.2f} ms")
-    #     print(f"  Build candidate labels: {(t8-t7)*1000:.2f} ms")
-    #     print(f"  Label check: {(t9-t8)*1000:.2f} ms")
-    #     if self.mol_transform:
-    #         print(f"  Mol transform on query: {(t_query1-t_query0)*1000:.2f} ms")
-    #         print(f"  Tensor conversion on query: {(t_query2-t_query1)*1000:.2f} ms")
-    #         print(f"  Set query mol: {(t_query3-t_query2)*1000:.2f} ms")
-    #         print(f"  Candidate loop total: {t_candidates_total*1000:.2f} ms")
-    #     print(f"  Total __getitem__: {(t_final-t0)*1000:.2f} ms")
-    #     return item
-    #
-    #
-    #
+
+
     # @staticmethod
     # @profile_function
     # def collate_fn(batch: T.Iterable[dict]) -> dict:
@@ -1136,34 +1136,42 @@ class MSnDataset(MassSpecDataset):
     #
     #     return collated_batch
 
-import multiprocessing
+
+
+
+
+from torch.utils.data.dataloader import default_collate
+from concurrent.futures import ProcessPoolExecutor, as_completed
 import os
+import pickle
+
+
+from concurrent.futures import ProcessPoolExecutor
+import multiprocessing
+
+# Use file-system sharing strategy (if needed)
 import torch.multiprocessing as mp
+mp.set_sharing_strategy("file_system")
 
-# --- Set the start method early ---
-try:
-    mp.set_start_method("forkserver", force=True)
-except RuntimeError:
-    pass  # start method has already been set
+# --- Module-level precomputation functions --- #
 
-def _precompute_for_index(args):
+def _precompute_for_index(idx, smiles, candidates_dict, mol_transform, mol_label_transform, dtype):
     """
-    Precompute candidate transformations and labels for a single valid index.
+    Precompute candidate transformations and labels for one valid index.
     Returns a tuple (idx, precomputed_dict).
     """
-    idx, smiles, candidates_dict, mol_transform, mol_label_transform, dtype = args
     smi = smiles[idx]
     query_label = mol_label_transform(smi)
-    # Compute transformed query fingerprint.
+    # Transform query molecule
     if mol_transform:
         query_fp = mol_transform(smi)
         if isinstance(query_fp, np.ndarray):
             query_fp = torch.as_tensor(query_fp, dtype=dtype)
     else:
         query_fp = smi  # fallback
-    # Retrieve candidate SMILES.
+    # Get candidate SMILES
     candidates_smi = candidates_dict[smi]
-    # Transform each candidate.
+    # Transform each candidate
     candidate_transformed = []
     if mol_transform:
         for c_smi in candidates_smi:
@@ -1173,7 +1181,7 @@ def _precompute_for_index(args):
             candidate_transformed.append(out)
     else:
         candidate_transformed = candidates_smi
-    # Compute candidate labels.
+    # Build candidate labels
     candidate_labels = [mol_label_transform(c_smi) == query_label for c_smi in candidates_smi]
     if not any(candidate_labels):
         raise ValueError(f"Query molecule {smi} not found among its candidates during precomputation.")
@@ -1184,22 +1192,28 @@ def _precompute_for_index(args):
         "candidates_smiles": candidates_smi
     }
 
+# Instead of using a lambda (which is not pickleable), define a module-level wrapper.
+def precompute_wrapper(args):
+    return _precompute_for_index(*args)
+
+# --- End precomputation helper functions --- #
+
 class MSnRetrievalDataset(MSnDataset):
     """
     Extension of MSnDataset that also loads a dictionary of candidate molecules for each item['smiles']
-    so that we can perform retrieval tasks.
+    so we can perform retrieval tasks.
 
     For each valid index (i.e. where candidate SMILES exist), we precompute:
-      - "mol": transformed query molecule (e.g. its fingerprint)
-      - "candidates": list of transformed candidate representations
-      - "labels": list of booleans indicating if each candidate matches the query
+      - "mol": the transformed query molecule (e.g. its fingerprint)
+      - "candidates": a list of transformed candidate representations
+      - "labels": a list of booleans indicating if each candidate matches the query
       - "candidates_smiles": the original candidate SMILES list
 
-    The collated batch includes:
-      - 'spec': PyG DataBatch of graphs
-      - 'mol': tensor of shape [batch_size, fp_size]
-      - 'candidates': tensor of shape [sum(candidates per item), fp_size]
-      - 'labels': 1D tensor of booleans for all candidates
+    The collated batch will include:
+      - 'spec' : DataBatch of PyG graphs
+      - 'mol'  : tensor of shape [batch_size, fp_size]
+      - 'candidates' : tensor of shape [sum(candidates per item), fp_size]
+      - 'labels' : 1D tensor of booleans for all candidates
       - 'batch_ptr': tensor of candidate counts per item
       - 'candidates_smiles': list of candidate SMILES
     """
@@ -1207,6 +1221,7 @@ class MSnRetrievalDataset(MSnDataset):
         self,
         mol_label_transform: T.Callable = MolToInChIKey(),
         candidates_pth: T.Optional[T.Union[Path, str]] = None,
+        cache_path: T.Optional[T.Union[Path, str]] = None,
         **kwargs,
     ):
         super().__init__(**kwargs)
@@ -1214,15 +1229,19 @@ class MSnRetrievalDataset(MSnDataset):
 
         # Load candidate SMILES from JSON.
         if candidates_pth is None:
-            self.candidates_pth = utils.hugging_face_download("molecules/MassSpecGym_retrieval_candidates_mass.json")
+            self.candidates_pth = utils.hugging_face_download(
+                "molecules/MassSpecGym_retrieval_candidates_mass.json"
+            )
         elif candidates_pth == 'bonus':
-            self.candidates_pth = utils.hugging_face_download("molecules/MassSpecGym_retrieval_candidates_formula.json")
+            self.candidates_pth = utils.hugging_face_download(
+                "molecules/MassSpecGym_retrieval_candidates_formula.json"
+            )
         else:
             self.candidates_pth = Path(candidates_pth)
         with open(self.candidates_pth, "r") as f:
             self.candidates_dict = json.load(f)
 
-        # Filter valid indices: keep only indices for which candidate SMILES exist.
+        # Filter valid indices: only keep those indices for which candidate SMILES exist.
         valid_indices = []
         for idx, smi in enumerate(self.smiles):
             if smi in self.candidates_dict:
@@ -1241,21 +1260,40 @@ class MSnRetrievalDataset(MSnDataset):
         print(f"Total valid indices: {len(self.valid_indices)}")
         print(f"MSnRetrievalDataset length: {len(self)}")
 
-        # Precompute candidate-side transformations in parallel.
-        self.precomputed = {}
-        allocated_cpus = int(os.environ.get("SLURM_CPUS_ON_NODE", os.cpu_count()))
-        # Use half of the allocated CPUs (at least 1, but not more than the number of valid indices)
-        num_workers = max(min(allocated_cpus - 2, len(self.valid_indices)), 1)
-        print(f"Using {num_workers} processes for precomputation.")
+        # Set up a cache file path for precomputed batches.
+        if cache_path is None:
+            self.cache_path = Path(self.candidates_pth).with_name("msnretrieval_precomputed.pkl")
+        else:
+            self.cache_path = Path(cache_path)
 
-        args_list = []
-        for idx in self.valid_indices:
-            args_list.append((idx, self.smiles, self.candidates_dict, self.mol_transform, self.mol_label_transform, self.dtype))
-        # Use a Pool with maxtasksperchild to avoid resource buildup.
-        with mp.Pool(processes=num_workers, maxtasksperchild=10) as pool:
-            results = pool.map(_precompute_for_index, args_list)
-        for idx, pre in results:
-            self.precomputed[idx] = pre
+        # Precompute candidate-side transformations.
+        if self.cache_path.exists():
+            print(f"Loading precomputed data from {self.cache_path}")
+            with open(self.cache_path, "rb") as f:
+                self.precomputed = pickle.load(f)
+        else:
+            print("Precomputing candidate-side transformations using multiprocessing...")
+            self.precomputed = {}
+            # Determine number of workers: use SLURM_CPUS_ON_NODE if set, else os.cpu_count()
+            allocated_cpus = int(os.environ.get("SLURM_CPUS_ON_NODE", os.cpu_count()))
+            num_workers = max(allocated_cpus - 2, 1)
+            print(f"Using {num_workers} processes for precomputation.")
+            # Prepare arguments for each valid index.
+            args_list = [
+                (idx, self.smiles, self.candidates_dict, self.mol_transform, self.mol_label_transform, self.dtype)
+                for idx in self.valid_indices
+            ]
+            # Choose a reasonable chunk size.
+            chunk_size = 10
+            with ProcessPoolExecutor(max_workers=num_workers) as executor:
+                results = list(executor.map(precompute_wrapper, args_list, chunksize=chunk_size))
+            # Store results.
+            for idx_result, precomputed in results:
+                self.precomputed[idx_result] = precomputed
+            print(f"Precomputation complete for {len(self.precomputed)} items.")
+            # Save cache to disk.
+            with open(self.cache_path, "wb") as f:
+                pickle.dump(self.precomputed, f)
 
     def __len__(self):
         return len(self.valid_indices)
@@ -1264,7 +1302,7 @@ class MSnRetrievalDataset(MSnDataset):
     def __getitem__(self, idx: int) -> dict:
         # Map to the actual index in the underlying dataset.
         real_idx = self.valid_indices[idx]
-        # Get the base item from the parent class (e.g. 'spec', 'precursor_mz', etc.).
+        # Get the base item (e.g. 'spec', 'precursor_mz', etc.) from the parent.
         item = super().__getitem__(real_idx)
         # Set the query SMILES.
         smi = self.smiles[real_idx]
@@ -1293,12 +1331,12 @@ class MSnRetrievalDataset(MSnDataset):
             mol_list = torch.stack(mol_list, dim=0)
         collated_batch["mol"] = mol_list
 
-        # Collate any additional scalar fields.
+        # Collate additional scalar fields.
         for k in batch[0].keys():
             if k not in {"spec", "mol", "candidates", "labels", "candidates_smiles"}:
                 collated_batch[k] = default_collate([item[k] for item in batch])
 
-        # Flatten candidate tensors.
+        # For candidates, flatten the lists and stack if tensors.
         all_candidates = []
         for item in batch:
             for cand in item["candidates"]:
