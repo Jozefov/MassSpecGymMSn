@@ -1144,6 +1144,7 @@ from torch.utils.data.dataloader import default_collate
 from concurrent.futures import ProcessPoolExecutor, as_completed
 import os
 import pickle
+from tqdm import tqdm
 
 
 from concurrent.futures import ProcessPoolExecutor
@@ -1152,8 +1153,6 @@ import multiprocessing
 # Use file-system sharing strategy (if needed)
 import torch.multiprocessing as mp
 mp.set_sharing_strategy("file_system")
-
-# --- Module-level precomputation functions --- #
 
 def _precompute_for_index(idx, smiles, candidates_dict, mol_transform, mol_label_transform, dtype):
     """
@@ -1192,7 +1191,7 @@ def _precompute_for_index(idx, smiles, candidates_dict, mol_transform, mol_label
         "candidates_smiles": candidates_smi
     }
 
-# Instead of using a lambda (which is not pickleable), define a module-level wrapper.
+# Instead of a lambda, define a module-level wrapper
 def precompute_wrapper(args):
     return _precompute_for_index(*args)
 
@@ -1274,24 +1273,28 @@ class MSnRetrievalDataset(MSnDataset):
         else:
             print("Precomputing candidate-side transformations using multiprocessing...")
             self.precomputed = {}
-            # Determine number of workers: use SLURM_CPUS_ON_NODE if set, else os.cpu_count()
+            # Determine number of workers: use SLURM_CPUS_ON_NODE if available, else os.cpu_count()
             allocated_cpus = int(os.environ.get("SLURM_CPUS_ON_NODE", os.cpu_count()))
             num_workers = max(allocated_cpus - 2, 1)
             print(f"Using {num_workers} processes for precomputation.")
-            # Prepare arguments for each valid index.
+            # Prepare the argument list for each valid index.
             args_list = [
                 (idx, self.smiles, self.candidates_dict, self.mol_transform, self.mol_label_transform, self.dtype)
                 for idx in self.valid_indices
             ]
-            # Choose a reasonable chunk size.
-            chunk_size = 10
+            chunk_size = 10  # Adjust chunk size as needed.
+            # Use ProcessPoolExecutor with tqdm progress bar.
             with ProcessPoolExecutor(max_workers=num_workers) as executor:
-                results = list(executor.map(precompute_wrapper, args_list, chunksize=chunk_size))
-            # Store results.
+                results = list(tqdm(
+                    executor.map(precompute_wrapper, args_list, chunksize=chunk_size),
+                    total=len(args_list),
+                    desc="Precomputing candidate transformations"
+                ))
+            # Store the results.
             for idx_result, precomputed in results:
                 self.precomputed[idx_result] = precomputed
             print(f"Precomputation complete for {len(self.precomputed)} items.")
-            # Save cache to disk.
+            # Save the cache to disk.
             with open(self.cache_path, "wb") as f:
                 pickle.dump(self.precomputed, f)
 
@@ -1302,7 +1305,7 @@ class MSnRetrievalDataset(MSnDataset):
     def __getitem__(self, idx: int) -> dict:
         # Map to the actual index in the underlying dataset.
         real_idx = self.valid_indices[idx]
-        # Get the base item (e.g. 'spec', 'precursor_mz', etc.) from the parent.
+        # Get the base item from the parent (e.g., 'spec', 'precursor_mz', etc.).
         item = super().__getitem__(real_idx)
         # Set the query SMILES.
         smi = self.smiles[real_idx]
@@ -1331,12 +1334,12 @@ class MSnRetrievalDataset(MSnDataset):
             mol_list = torch.stack(mol_list, dim=0)
         collated_batch["mol"] = mol_list
 
-        # Collate additional scalar fields.
+        # Collate any additional scalar fields.
         for k in batch[0].keys():
             if k not in {"spec", "mol", "candidates", "labels", "candidates_smiles"}:
                 collated_batch[k] = default_collate([item[k] for item in batch])
 
-        # For candidates, flatten the lists and stack if tensors.
+        # Flatten candidate lists.
         all_candidates = []
         for item in batch:
             for cand in item["candidates"]:
@@ -1349,7 +1352,7 @@ class MSnRetrievalDataset(MSnDataset):
         all_labels = sum([item["labels"] for item in batch], start=[])
         collated_batch["labels"] = torch.as_tensor(all_labels, dtype=torch.bool)
 
-        # Build batch_ptr (number of candidates per item).
+        # Build batch_ptr: number of candidates per item.
         batch_ptr = [len(item["candidates"]) for item in batch]
         collated_batch["batch_ptr"] = torch.as_tensor(batch_ptr, dtype=torch.int)
 
