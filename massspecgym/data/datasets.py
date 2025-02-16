@@ -1154,55 +1154,61 @@ import multiprocessing
 import torch.multiprocessing as mp
 mp.set_sharing_strategy("file_system")
 
-def _precompute_for_index(idx: int,
-                          smiles: T.List[str],
-                          candidates_dict: dict,
-                          mol_transform: T.Callable,
-                          mol_label_transform: T.Callable,
-                          dtype: torch.dtype):
+def _precompute_for_indices(chunk_indices: T.List[int],
+                            smiles: T.List[str],
+                            candidates_dict: dict,
+                            mol_transform: T.Callable,
+                            mol_label_transform: T.Callable,
+                            dtype: torch.dtype) -> T.Dict[int, dict]:
     """
-    Precompute candidate transformations and labels for one valid index.
-    Returns a tuple (idx, precomputed_dict).
+    Process a chunk (list) of indices.
+    For each index, precompute:
+      - The transformed query molecule ("mol")
+      - A list of transformed candidate representations ("candidates")
+      - A list of booleans (labels) indicating if each candidate matches the query
+      - The original candidate SMILES list ("candidates_smiles")
+    Returns a dictionary mapping each index (from the chunk) to its precomputed dict.
     """
-    smi = smiles[idx]
-    query_label = mol_label_transform(smi)
-    # Transform query molecule
-    if mol_transform:
-        query_fp = mol_transform(smi)
-        if isinstance(query_fp, np.ndarray):
-            query_fp = torch.as_tensor(query_fp, dtype=dtype)
-    else:
-        query_fp = smi  # fallback if no transform provided
-    # Retrieve candidate SMILES.
-    candidates_smi = candidates_dict[smi]
-    # Transform each candidate.
-    candidate_transformed = []
-    if mol_transform:
-        for c_smi in candidates_smi:
-            out = mol_transform(c_smi)
-            if isinstance(out, np.ndarray):
-                out = torch.as_tensor(out, dtype=dtype)
-            candidate_transformed.append(out)
-    else:
-        candidate_transformed = candidates_smi
-    # Build candidate labels.
-    candidate_labels = [mol_label_transform(c_smi) == query_label for c_smi in candidates_smi]
-    if not any(candidate_labels):
-        raise ValueError(f"Query molecule {smi} not found among its candidates during precomputation.")
-    return idx, {
-        "mol": query_fp,
-        "candidates": candidate_transformed,
-        "labels": candidate_labels,
-        "candidates_smiles": candidates_smi
-    }
+    results = {}
+    for idx in chunk_indices:
+        smi = smiles[idx]
+        query_label = mol_label_transform(smi)
+        # Transform query molecule.
+        if mol_transform:
+            query_fp = mol_transform(smi)
+            if isinstance(query_fp, np.ndarray):
+                query_fp = torch.as_tensor(query_fp, dtype=dtype)
+        else:
+            query_fp = smi  # fallback
+        # Retrieve candidate SMILES.
+        candidates_smi = candidates_dict[smi]
+        # Transform each candidate.
+        candidate_transformed = []
+        if mol_transform:
+            for c_smi in candidates_smi:
+                out = mol_transform(c_smi)
+                if isinstance(out, np.ndarray):
+                    out = torch.as_tensor(out, dtype=dtype)
+                candidate_transformed.append(out)
+        else:
+            candidate_transformed = candidates_smi
+        # Build candidate labels.
+        candidate_labels = [mol_label_transform(c_smi) == query_label for c_smi in candidates_smi]
+        if not any(candidate_labels):
+            raise ValueError(f"Query molecule {smi} not found among its candidates during precomputation.")
+        results[idx] = {
+            "mol": query_fp,
+            "candidates": candidate_transformed,
+            "labels": candidate_labels,
+            "candidates_smiles": candidates_smi
+        }
+    return results
 
 def precompute_wrapper(args):
-    """Module-level wrapper to unpack arguments."""
-    return _precompute_for_index(*args)
+    """A module‐level wrapper to unpack arguments."""
+    return _precompute_for_indices(*args)
 
-
-# ---------------- MSnRetrievalDataset Definition ---------------- #
-
+# --- Dataset Definition --- #
 class MSnRetrievalDataset(MSnDataset):
     """
     Extension of MSnDataset that also loads a dictionary of candidate molecules for each item['smiles']
@@ -1234,15 +1240,19 @@ class MSnRetrievalDataset(MSnDataset):
 
         # Load candidate SMILES from JSON.
         if candidates_pth is None:
-            self.candidates_pth = utils.hugging_face_download("molecules/MassSpecGym_retrieval_candidates_mass.json")
+            self.candidates_pth = utils.hugging_face_download(
+                "molecules/MassSpecGym_retrieval_candidates_mass.json"
+            )
         elif candidates_pth == 'bonus':
-            self.candidates_pth = utils.hugging_face_download("molecules/MassSpecGym_retrieval_candidates_formula.json")
+            self.candidates_pth = utils.hugging_face_download(
+                "molecules/MassSpecGym_retrieval_candidates_formula.json"
+            )
         else:
             self.candidates_pth = Path(candidates_pth)
         with open(self.candidates_pth, "r") as f:
             self.candidates_dict = json.load(f)
 
-        # Filter valid indices: keep only indices for which candidate SMILES exist.
+        # Filter valid indices: only keep indices for which candidate SMILES exist.
         valid_indices = []
         for idx, smi in enumerate(self.smiles):
             if smi in self.candidates_dict:
@@ -1273,45 +1283,52 @@ class MSnRetrievalDataset(MSnDataset):
             with open(self.cache_path, "rb") as f:
                 self.precomputed = pickle.load(f)
         else:
-            print("Precomputing candidate-side transformations using multiprocessing with chunking...")
+            print("Precomputing candidate-side transformations using multiprocessing.Pool with chunking...")
             self.precomputed = {}
-            # Determine number of worker processes.
+            # Determine number of workers.
             allocated_cpus = int(os.environ.get("SLURM_CPUS_ON_NODE", os.cpu_count()))
             num_workers = max(allocated_cpus - 2, 1)
-            print(f"Using {num_workers} processes for precomputation.")
-            # Prepare the list of valid indices.
+            print(f"Using {num_workers} worker processes for precomputation.")
             all_indices = self.valid_indices
             total = len(all_indices)
-            chunk_size = 1000  # Adjust this chunk size as needed.
-            # Process indices in chunks.
-            for i in tqdm(range(0, total, chunk_size), desc="Precomputing in chunks", total=(total + chunk_size - 1) // chunk_size):
-                chunk_indices = all_indices[i:i+chunk_size]
-                # Prepare argument tuples for each index in the chunk.
-                args_list = [
-                    (idx, self.smiles, self.candidates_dict, self.mol_transform,
-                     self.mol_label_transform, self.dtype)
-                    for idx in chunk_indices
-                ]
-                with ProcessPoolExecutor(max_workers=num_workers) as executor:
-                    # Use precompute_wrapper (no lambda) with a specified chunksize.
-                    results = list(executor.map(precompute_wrapper, args_list, chunksize=10))
-                for idx_result, precomputed in results:
-                    self.precomputed[idx_result] = precomputed
-                # Save intermediate cache to disk after each chunk.
-                with open(self.cache_path, "wb") as f:
-                    pickle.dump(self.precomputed, f)
+            chunk_size = 500  # Adjust this value as needed.
+            # Partition indices into chunks.
+            chunked_indices = [all_indices[i:i + chunk_size] for i in range(0, total, chunk_size)]
+            # Prepare arguments for each chunk.
+            args_list = [
+                (chunk, self.smiles, self.candidates_dict, self.mol_transform, self.mol_label_transform, self.dtype)
+                for chunk in chunked_indices
+            ]
+            # Use Pool.map to process all chunks concurrently.
+            with mp.Pool(processes=num_workers) as pool:
+                chunk_results = list(tqdm(
+                    pool.map(precompute_wrapper, args_list, chunksize=1),
+                    total=len(args_list),
+                    desc="Precomputing candidate transformations"
+                ))
+            # Merge all chunk results into a single dictionary.
+            for result in chunk_results:
+                self.precomputed.update(result)
             print(f"Precomputation complete for {len(self.precomputed)} items.")
+            # Save the precomputed cache to disk.
+            with open(self.cache_path, "wb") as f:
+                pickle.dump(self.precomputed, f)
 
     def __len__(self):
         return len(self.valid_indices)
 
     @profile_function
     def __getitem__(self, idx: int) -> dict:
+        # Map to the actual index in the underlying dataset.
         real_idx = self.valid_indices[idx]
+        # Get the base item (e.g. 'spec', etc.) from the parent.
         item = super().__getitem__(real_idx)
+        # Set the query SMILES.
         smi = self.smiles[real_idx]
         item["smiles"] = smi
+        # Include the original candidate SMILES.
         item["candidates_smiles"] = self.candidates_dict[smi]
+        # Retrieve precomputed candidate-side values.
         pre = self.precomputed[real_idx]
         item["mol"] = pre["mol"]
         item["candidates"] = pre["candidates"]
@@ -1331,7 +1348,7 @@ class MSnRetrievalDataset(MSnDataset):
         if isinstance(mol_list[0], torch.Tensor):
             mol_list = torch.stack(mol_list, dim=0)
         collated_batch["mol"] = mol_list
-        # Collate any additional scalar fields.
+        # Collate additional scalar fields.
         for k in batch[0].keys():
             if k not in {"spec", "mol", "candidates", "labels", "candidates_smiles"}:
                 collated_batch[k] = default_collate([item[k] for item in batch])
