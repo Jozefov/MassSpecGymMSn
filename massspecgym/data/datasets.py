@@ -1140,12 +1140,6 @@ class MSnDataset(MassSpecDataset):
 
 
 
-from torch.utils.data.dataloader import default_collate
-from concurrent.futures import ProcessPoolExecutor, as_completed
-import os
-import pickle
-from tqdm import tqdm
-
 import os
 import json
 import pickle
@@ -1156,15 +1150,19 @@ from torch_geometric.data import Batch
 from torch.utils.data.dataloader import default_collate
 from tqdm import tqdm
 import multiprocessing as mp
-from concurrent.futures import ProcessPoolExecutor
+from multiprocessing import Pool, Lock
 
 import typing as T
 from pathlib import Path
 
-# Make sure torch uses the file_system sharing strategy.
-# mp.set_sharing_strategy("file_system")
+# Ensure that torch uses the file_system sharing strategy.
+import torch.multiprocessing as tmp
+tmp.set_sharing_strategy("file_system")
 
-# === Precomputation Helper Functions === #
+# Create a global lock for writing to the HDF5 file.
+write_lock = Lock()
+
+# === Precomputation Helper Function === #
 def _precompute_for_indices(chunk_indices: T.List[int],
                             smiles: T.List[str],
                             candidates_dict: dict,
@@ -1249,7 +1247,7 @@ class MSnRetrievalDataset(MSnDataset):
         super().__init__(**kwargs)
         self.mol_label_transform = mol_label_transform
 
-        # --- Load candidate SMILES ---
+        # --- Load candidate SMILES from JSON ---
         if candidates_pth is None:
             self.candidates_pth = utils.hugging_face_download(
                 "molecules/MassSpecGym_retrieval_candidates_mass.json"
@@ -1282,48 +1280,58 @@ class MSnRetrievalDataset(MSnDataset):
         print(f"Total valid indices: {len(self.valid_indices)}")
         print(f"MSnRetrievalDataset length: {len(self)}")
 
-        # --- Set up cache file path ---
+        # --- Set up cache file path (HDF5) ---
         if cache_path is None:
             self.cache_path = Path(self.candidates_pth).with_suffix(".h5")
         else:
             self.cache_path = Path(cache_path)
 
-        # --- Precomputation ---
+        # --- Precompute candidate-side transformations and write them in chunks ---
         if self.cache_path.exists():
             print(f"Loading precomputed data from {self.cache_path}")
-            self.h5cache = h5py.File(self.cache_path, "r")
+            self.h5cache = h5py.File(self.cache_path, "r", driver="core", backing_store=False)
         else:
-            print("Precomputing candidate-side transformations using multiprocessing with chunking...")
+            print("Precomputing candidate-side transformations using multiprocessing.Pool with chunking and writing to HDF5...")
             self.h5cache = h5py.File(self.cache_path, "w")
             pregrp = self.h5cache.create_group("precomputed")
             allocated_cpus = int(os.environ.get("SLURM_CPUS_ON_NODE", os.cpu_count()))
             num_workers = max(allocated_cpus - 2, 1)
-            print(f"Using {num_workers} processes for precomputation.")
+            print(f"Using {num_workers} worker processes for precomputation.")
             all_indices = self.valid_indices
             total = len(all_indices)
-            chunk_size = 500  # adjust as needed
+            chunk_size = 500  # Adjust chunk size as needed.
+            # Partition indices into chunks.
             chunked_indices = [all_indices[i:i + chunk_size] for i in range(0, total, chunk_size)]
-            for i, chunk in enumerate(tqdm(chunked_indices, desc="Processing chunks")):
-                args = (chunk, self.smiles, self.candidates_dict,
-                        self.mol_transform, self.mol_label_transform, self.dtype)
-                with mp.Pool(processes=num_workers) as pool:
-                    chunk_result = pool.apply(_precompute_for_indices, args)
-                # For each index in the chunk, create a subgroup and store its data.
-                for idx, data in chunk_result.items():
-                    grp = pregrp.create_group(str(idx))
-                    # Store "mol" (assume 1D fp vector).
-                    grp.create_dataset("mol", data=data["mol"].cpu().numpy() if torch.is_tensor(data["mol"]) else np.array(data["mol"]), compression="gzip")
-                    # Store "candidates" as a 2D array (n, fp_size).
-                    cand_arr = np.stack([cand.cpu().numpy() if torch.is_tensor(cand) else np.array(cand) for cand in data["candidates"]])
-                    grp.create_dataset("candidates", data=cand_arr, compression="gzip")
-                    # Store "labels" as a 1D boolean array.
-                    grp.create_dataset("labels", data=np.array(data["labels"], dtype=bool), compression="gzip")
-                    # Store "candidates_smiles" as variable-length strings.
-                    dt = h5py.special_dtype(vlen=str)
-                    grp.create_dataset("candidates_smiles", data=np.array(data["candidates_smiles"], dtype=object), dtype=dt, compression="gzip")
-                self.h5cache.flush()
-            # Close and reopen in read mode.
+            # Prepare argument list for each chunk.
+            args_list = [
+                (chunk, self.smiles, self.candidates_dict, self.mol_transform, self.mol_label_transform, self.dtype)
+                for chunk in chunked_indices
+            ]
+            # Use mp.Pool.map to process chunks concurrently.
+            with mp.Pool(processes=num_workers) as pool:
+                for chunk_result in tqdm(pool.imap_unordered(precompute_wrapper, args_list, chunksize=1),
+                                         total=len(args_list),
+                                         desc="Processing chunks"):
+                    # Immediately write the results for this chunk to the HDF5 file.
+                    for idx, data in chunk_result.items():
+                        with write_lock:
+                            grp = pregrp.create_group(str(idx))
+                            # Write "mol" dataset (assumed 1D).
+                            grp.create_dataset("mol", data=data["mol"].cpu().numpy() if torch.is_tensor(data["mol"]) else np.array(data["mol"]))
+                            # Write "candidates" dataset as a 2D array.
+                            cand_arr = np.stack([
+                                cand.cpu().numpy() if torch.is_tensor(cand) else np.array(cand)
+                                for cand in data["candidates"]
+                            ])
+                            grp.create_dataset("candidates", data=cand_arr)
+                            # Write "labels" as a 1D boolean array.
+                            grp.create_dataset("labels", data=np.array(data["labels"], dtype=bool))
+                            # Write "candidates_smiles" as an array of variable-length strings.
+                            dt = h5py.special_dtype(vlen=str)
+                            grp.create_dataset("candidates_smiles", data=np.array(data["candidates_smiles"], dtype=object), dtype=dt)
+                    self.h5cache.flush()
             self.h5cache.close()
+            # Reopen in read mode.
             self.h5cache = h5py.File(self.cache_path, "r")
             print(f"Precomputation complete. Cache saved to {self.cache_path}")
 
@@ -1332,7 +1340,6 @@ class MSnRetrievalDataset(MSnDataset):
 
     @profile_function
     def __getitem__(self, idx: int) -> dict:
-        # Map to the actual index.
         real_idx = self.valid_indices[idx]
         item = super().__getitem__(real_idx)
         smi = self.smiles[real_idx]
@@ -1343,30 +1350,25 @@ class MSnRetrievalDataset(MSnDataset):
         mol_np = grp["mol"][()]
         item["mol"] = torch.tensor(mol_np, dtype=self.dtype)
         candidates_np = grp["candidates"][()]
-        # Convert each candidate (row) to a tensor.
         item["candidates"] = [torch.tensor(c, dtype=self.dtype) for c in candidates_np]
         labels_np = grp["labels"][()]
-        item["labels"] = labels_np.tolist()  # convert boolean array to list
+        item["labels"] = labels_np.tolist()
         return item
 
     @staticmethod
     @profile_function
     def collate_fn(batch: T.Iterable[dict]) -> dict:
         collated_batch = {}
-        # Collate PyG graphs.
         spec_list = [item["spec"] for item in batch]
         spec_batch = Batch.from_data_list(spec_list)
         collated_batch["spec"] = spec_batch
-        # Collate query molecule representations.
         mol_list = [item["mol"] for item in batch]
         if isinstance(mol_list[0], torch.Tensor):
             mol_list = torch.stack(mol_list, dim=0)
         collated_batch["mol"] = mol_list
-        # Collate additional scalar fields.
         for k in batch[0].keys():
             if k not in {"spec", "mol", "candidates", "labels", "candidates_smiles"}:
                 collated_batch[k] = default_collate([item[k] for item in batch])
-        # Flatten candidate representations.
         all_candidates = []
         for item in batch:
             for cand in item["candidates"]:
@@ -1374,13 +1376,10 @@ class MSnRetrievalDataset(MSnDataset):
         if isinstance(all_candidates[0], torch.Tensor):
             all_candidates = torch.stack(all_candidates, dim=0)
         collated_batch["candidates"] = all_candidates
-        # Flatten candidate labels.
         all_labels = sum([item["labels"] for item in batch], start=[])
         collated_batch["labels"] = torch.as_tensor(all_labels, dtype=torch.bool)
-        # Build batch_ptr.
         batch_ptr = [len(item["candidates"]) for item in batch]
         collated_batch["batch_ptr"] = torch.as_tensor(batch_ptr, dtype=torch.int)
-        # Concatenate candidate SMILES.
         all_cand_smiles = sum([item["candidates_smiles"] for item in batch], start=[])
         collated_batch["candidates_smiles"] = all_cand_smiles
         return collated_batch
