@@ -1338,21 +1338,82 @@ class MSnRetrievalDataset(MSnDataset):
     def __len__(self):
         return len(self.valid_indices)
 
+    # @profile_function
+    # def __getitem__(self, idx: int) -> dict:
+    #     real_idx = self.valid_indices[idx]
+    #     item = super().__getitem__(real_idx)
+    #     smi = self.smiles[real_idx]
+    #     item["smiles"] = smi
+    #     item["candidates_smiles"] = self.candidates_dict[smi]
+    #     # Retrieve precomputed data from HDF5.
+    #     grp = self.h5cache["precomputed"][str(real_idx)]
+    #     mol_np = grp["mol"][()]
+    #     item["mol"] = torch.tensor(mol_np, dtype=self.dtype)
+    #     candidates_np = grp["candidates"][()]
+    #     item["candidates"] = [torch.tensor(c, dtype=self.dtype) for c in candidates_np]
+    #     labels_np = grp["labels"][()]
+    #     item["labels"] = labels_np.tolist()
+    #     return item
+
     @profile_function
     def __getitem__(self, idx: int) -> dict:
+        t0 = time.perf_counter()
+        # Map to the actual index in the underlying dataset.
         real_idx = self.valid_indices[idx]
+        t1 = time.perf_counter()
+
+        # Get the base item (e.g., 'spec', etc.) from the parent.
         item = super().__getitem__(real_idx)
+        t2 = time.perf_counter()
+
+        # Set the query SMILES.
         smi = self.smiles[real_idx]
+        t3 = time.perf_counter()
         item["smiles"] = smi
+        t4 = time.perf_counter()
+
+        # Include the original candidate SMILES.
         item["candidates_smiles"] = self.candidates_dict[smi]
-        # Retrieve precomputed data from HDF5.
+        t5 = time.perf_counter()
+
+        # Retrieve precomputed candidate-side values from HDF5.
         grp = self.h5cache["precomputed"][str(real_idx)]
+        t6 = time.perf_counter()
+
+        # Get the query molecule representation.
         mol_np = grp["mol"][()]
+        t7 = time.perf_counter()
         item["mol"] = torch.tensor(mol_np, dtype=self.dtype)
+        t8 = time.perf_counter()
+
+        # Retrieve candidate representations.
         candidates_np = grp["candidates"][()]
+        t9 = time.perf_counter()
         item["candidates"] = [torch.tensor(c, dtype=self.dtype) for c in candidates_np]
+        t10 = time.perf_counter()
+
+        # Retrieve candidate labels.
         labels_np = grp["labels"][()]
+        t11 = time.perf_counter()
         item["labels"] = labels_np.tolist()
+        t12 = time.perf_counter()
+
+        # Print the detailed timing breakdown.
+        print(f"__getitem__ timing breakdown for idx {idx}:")
+        print(f"  Map valid index: {(t1 - t0) * 1000:.2f} ms")
+        print(f"  Parent __getitem__: {(t2 - t1) * 1000:.2f} ms")
+        print(f"  Retrieve SMILES: {(t3 - t2) * 1000:.2f} ms")
+        print(f"  Set SMILES: {(t4 - t3) * 1000:.2f} ms")
+        print(f"  Candidate SMILES lookup: {(t5 - t4) * 1000:.2f} ms")
+        print(f"  HDF5 group lookup: {(t6 - t5) * 1000:.2f} ms")
+        print(f"  Mol retrieval from HDF5: {(t7 - t6) * 1000:.2f} ms")
+        print(f"  Mol tensor conversion: {(t8 - t7) * 1000:.2f} ms")
+        print(f"  Candidates retrieval from HDF5: {(t9 - t8) * 1000:.2f} ms")
+        print(f"  Candidates tensor conversion: {(t10 - t9) * 1000:.2f} ms")
+        print(f"  Labels retrieval from HDF5: {(t11 - t10) * 1000:.2f} ms")
+        print(f"  Labels conversion: {(t12 - t11) * 1000:.2f} ms")
+        print(f"  Total __getitem__: {(t12 - t0) * 1000:.2f} ms")
+
         return item
 
     @staticmethod
