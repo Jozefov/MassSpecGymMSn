@@ -945,7 +945,8 @@ class MSnRetrievalDataset(MSnDataset):
         # --- Precompute candidate-side transformations and cache to HDF5 ---
         if self.cache_pth.exists():
             print(f"Loading precomputed data from {self.cache_pth}")
-            self.h5cache = h5py.File(self.cache_pth, "r", driver="core", backing_store=False)
+            # self.h5cache = h5py.File(self.cache_pth, "r", driver="core", backing_store=False)
+            self.h5cache = h5py.File(self.cache_pth, "r")
         else:
             # Recommended to run this past on local pc,
             # HPC environment for GPUs have problem handling multiprocessing from a standard library.
