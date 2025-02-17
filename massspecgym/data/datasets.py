@@ -905,7 +905,7 @@ class MSnRetrievalDataset(MSnDataset):
             self,
             mol_label_transform: T.Callable = MolToInChIKey(),
             candidates_pth: T.Optional[T.Union[Path, str]] = None,
-            cache_path: T.Optional[T.Union[Path, str]] = None,
+            cache_pth: T.Optional[T.Union[Path, str]] = None,
             **kwargs,
     ):
         super().__init__(**kwargs)
@@ -938,15 +938,15 @@ class MSnRetrievalDataset(MSnDataset):
         print(f"MSnRetrievalDataset length: {len(self)}")
 
         # --- Set up cache file path (HDF5) ---
-        if cache_path is None:
-            self.cache_path = Path(self.candidates_pth).with_suffix(".h5")
+        if cache_pth is None:
+            self.cache_pth = Path(self.candidates_pth).with_suffix(".h5")
         else:
-            self.cache_path = Path(cache_path)
+            self.cache_pth = Path(cache_pth)
 
         # --- Precompute candidate-side transformations and cache to HDF5 ---
-        if self.cache_path.exists():
-            print(f"Loading precomputed data from {self.cache_path}")
-            self.h5cache = h5py.File(self.cache_path, "r", driver="core", backing_store=False)
+        if self.cache_pth.exists():
+            print(f"Loading precomputed data from {self.cache_pth}")
+            self.h5cache = h5py.File(self.cache_pth, "r", driver="core", backing_store=False)
         else:
             # Recommended to run this past on local pc,
             # HPC environment for GPUs have problem handling multiprocessing from a standard library.
@@ -955,7 +955,7 @@ class MSnRetrievalDataset(MSnDataset):
 
     def _precompute_and_cache(self):
         print("Precomputing candidate-side transformations using multiprocessing with chunking and writing to HDF5...")
-        self.h5cache = h5py.File(self.cache_path, "w")
+        self.h5cache = h5py.File(self.cache_pth, "w")
         pregrp = self.h5cache.create_group("precomputed")
         allocated_cpus = int(os.environ.get("SLURM_CPUS_ON_NODE", os.cpu_count()))
         num_workers = max(allocated_cpus - 2, 1)
@@ -1000,8 +1000,8 @@ class MSnRetrievalDataset(MSnDataset):
                                            dtype=dt, compression="gzip")
                 self.h5cache.flush()
         self.h5cache.close()
-        self.h5cache = h5py.File(self.cache_path, "r", driver="core", backing_store=False)
-        print(f"Precomputation complete. Cache saved to {self.cache_path}")
+        self.h5cache = h5py.File(self.cache_pth, "r", driver="core", backing_store=False)
+        print(f"Precomputation complete. Cache saved to {self.cache_pth}")
 
     @staticmethod
     def _precompute_for_indices(chunk_indices: T.List[int],
