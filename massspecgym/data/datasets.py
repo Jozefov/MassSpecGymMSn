@@ -948,6 +948,9 @@ class MSnRetrievalDataset(MSnDataset):
             print(f"Loading precomputed data from {self.cache_path}")
             self.h5cache = h5py.File(self.cache_path, "r", driver="core", backing_store=False)
         else:
+            # Recommended to run this past on local pc,
+            # HPC environment for GPUs have problem handling multiprocessing from a standard library.
+
             self._precompute_and_cache()
 
     def _precompute_and_cache(self):
@@ -959,7 +962,7 @@ class MSnRetrievalDataset(MSnDataset):
         print(f"Using {num_workers} worker processes for precomputation.")
         all_indices = self.valid_indices
         total = len(all_indices)
-        chunk_size = 500  # Adjust chunk size as needed.
+        chunk_size = 500
         # Partition indices into chunks.
         chunked_indices = [all_indices[i:i + chunk_size] for i in range(0, total, chunk_size)]
         # Prepare argument list for each chunk.
@@ -977,27 +980,26 @@ class MSnRetrievalDataset(MSnDataset):
                 for idx, data in chunk_result.items():
                     with write_lock:
                         grp = pregrp.create_group(str(idx))
-                        # Write "mol" dataset with gzip compression.
+                        # Write mol dataset with gzip compression.
                         grp.create_dataset(
                             "mol",
                             data=data["mol"].cpu().numpy() if torch.is_tensor(data["mol"]) else np.array(data["mol"]),
                             compression="gzip"
                         )
-                        # Write "candidates" as a 2D array (vectorized conversion).
+                        # Write candidates as a 2D array.
                         cand_arr = np.stack([
                             cand.cpu().numpy() if torch.is_tensor(cand) else np.array(cand)
                             for cand in data["candidates"]
                         ])
                         grp.create_dataset("candidates", data=cand_arr, compression="gzip")
-                        # Write "labels" as a 1D boolean array.
+                        # Write labels as a 1D boolean array.
                         grp.create_dataset("labels", data=np.array(data["labels"], dtype=bool), compression="gzip")
-                        # Write "candidates_smiles" as an array of variable-length strings.
+                        # Write candidates_smiles as an array of variable-length strings.
                         dt = h5py.special_dtype(vlen=str)
                         grp.create_dataset("candidates_smiles", data=np.array(data["candidates_smiles"], dtype=object),
                                            dtype=dt, compression="gzip")
                 self.h5cache.flush()
         self.h5cache.close()
-        # Reopen HDF5 cache in read mode with desired settings.
         self.h5cache = h5py.File(self.cache_path, "r", driver="core", backing_store=False)
         print(f"Precomputation complete. Cache saved to {self.cache_path}")
 
