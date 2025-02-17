@@ -97,7 +97,7 @@ class MassSpecDataset(Dataset):
     def __len__(self) -> int:
         return len(self.spectra)
 
-    @profile_function
+    # @profile_function
     def __getitem__(
         self, i: int, transform_spec: bool = True, transform_mol: bool = True
     ) -> dict:
@@ -155,8 +155,7 @@ class MassSpecDataset(Dataset):
         return item
 
     @staticmethod
-    @staticmethod
-    @profile_function
+    # @profile_function
     def collate_fn(batch: T.Iterable[dict]) -> dict:
         """
         Custom collate function to handle the outputs of __getitem__.
