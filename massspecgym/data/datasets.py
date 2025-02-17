@@ -1317,18 +1317,18 @@ class MSnRetrievalDataset(MSnDataset):
                         with write_lock:
                             grp = pregrp.create_group(str(idx))
                             # Write "mol" dataset (assumed 1D).
-                            grp.create_dataset("mol", data=data["mol"].cpu().numpy() if torch.is_tensor(data["mol"]) else np.array(data["mol"]))
+                            grp.create_dataset("mol", data=data["mol"].cpu().numpy() if torch.is_tensor(data["mol"]) else np.array(data["mol"]), compression="gzip")
                             # Write "candidates" dataset as a 2D array.
                             cand_arr = np.stack([
                                 cand.cpu().numpy() if torch.is_tensor(cand) else np.array(cand)
                                 for cand in data["candidates"]
                             ])
-                            grp.create_dataset("candidates", data=cand_arr)
+                            grp.create_dataset("candidates", data=cand_arr, compression="gzip")
                             # Write "labels" as a 1D boolean array.
-                            grp.create_dataset("labels", data=np.array(data["labels"], dtype=bool))
+                            grp.create_dataset("labels", data=np.array(data["labels"], dtype=bool), compression="gzip")
                             # Write "candidates_smiles" as an array of variable-length strings.
                             dt = h5py.special_dtype(vlen=str)
-                            grp.create_dataset("candidates_smiles", data=np.array(data["candidates_smiles"], dtype=object), dtype=dt)
+                            grp.create_dataset("candidates_smiles", data=np.array(data["candidates_smiles"], dtype=object), dtype=dt, compression="gzip")
                     self.h5cache.flush()
             self.h5cache.close()
             # Reopen in read mode.
@@ -1389,7 +1389,8 @@ class MSnRetrievalDataset(MSnDataset):
         # Retrieve candidate representations.
         candidates_np = grp["candidates"][()]
         t9 = time.perf_counter()
-        item["candidates"] = [torch.tensor(c, dtype=self.dtype) for c in candidates_np]
+        # item["candidates"] = [torch.tensor(c, dtype=self.dtype) for c in candidates_np]
+        item["candidates"] = torch.from_numpy(candidates_np).to(self.dtype)
         t10 = time.perf_counter()
 
         # Retrieve candidate labels.
