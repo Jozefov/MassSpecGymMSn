@@ -859,7 +859,6 @@ class MSnDataset(MassSpecDataset):
 
 import os
 import json
-import pickle
 import h5py
 import numpy as np
 import torch
@@ -871,7 +870,6 @@ from multiprocessing import Pool, Lock
 import typing as T
 from pathlib import Path
 
-# Ensure that torch uses the file_system sharing strategy.
 import torch.multiprocessing as tmp
 
 tmp.set_sharing_strategy("file_system")
