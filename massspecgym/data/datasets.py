@@ -910,7 +910,7 @@ class MSnRetrievalDataset(MSnDataset):
         super().__init__(**kwargs)
         self.mol_label_transform = mol_label_transform
 
-        # --- Load candidate SMILES from JSON ---
+        # Load candidate SMILES from JSON
         if candidates_pth is None:
             self.candidates_pth = utils.hugging_face_download("molecules/MassSpecGym_retrieval_candidates_mass.json")
         elif candidates_pth == 'bonus':
@@ -920,7 +920,7 @@ class MSnRetrievalDataset(MSnDataset):
         with open(self.candidates_pth, "r") as f:
             self.candidates_dict = json.load(f)
 
-        # --- Filter valid indices ---
+        # Filter valid indices
         self.valid_indices = []
         for idx, smi in enumerate(self.smiles):
             if smi in self.candidates_dict:
@@ -936,13 +936,13 @@ class MSnRetrievalDataset(MSnDataset):
         print(f"Total valid indices: {len(self.valid_indices)}")
         print(f"MSnRetrievalDataset length: {len(self)}")
 
-        # --- Set up cache file path (HDF5) ---
+        # Set up cache file path
         if cache_pth is None:
             self.cache_pth = Path(self.candidates_pth).with_suffix(".h5")
         else:
             self.cache_pth = Path(cache_pth)
 
-        # --- Precompute candidate-side transformations and cache to HDF5 ---
+        # Precompute candidate side transformations and cache to HDF5
         if self.cache_pth.exists():
             print(f"Loading precomputed data from {self.cache_pth}")
             # self.h5cache = h5py.File(self.cache_pth, "r", driver="core", backing_store=False)
