@@ -31,21 +31,40 @@ from torchmetrics.wrappers import BootStrapper
 from torchmetrics.metric import Metric
 
 
-def load_massspecgym(fold: T.Optional[str] = None) -> pd.DataFrame:
+def load_massspecgym(
+    source: T.Optional[T.Union[str, Path]] = None,
+    fold: T.Optional[str] = None
+) -> pd.DataFrame:
     """
-    Load the MassSpecGym dataset.
+    Load the MassSpecGym dataset from either:
+      - a local TSV file, or
+      - the HuggingFace Hub (fallback if `source` is None or not found locally).
 
     Args:
-        fold (str, optional): Fold name to load. If None, the entire dataset is loaded.
-    """
-    df = pd.read_csv(hugging_face_download("MassSpecGym.tsv"), sep="\t")
-    df = df.set_index("identifier")
-    df['mzs'] = df['mzs'].apply(parse_spec_array)
-    df['intensities'] = df['intensities'].apply(parse_spec_array)
-    if fold is not None:
-        df = df[df['fold'] == fold]
-    return df
+        source (str or Path, optional): Path to MassSpecGym.tsv on disk.
+            If not provided or the file does not exist, will download via hf_hub_download.
+        fold (str, optional): If set, filter to df[df['fold'] == fold].
 
+    Returns:
+        pd.DataFrame: indexed by 'identifier', with parsed mzs/intensities arrays.
+    """
+    # resolve local vs. remote
+    if source is None or not Path(source).exists():
+        csv_pth = hugging_face_download("MassSpecGym.tsv")
+    else:
+        csv_pth = Path(source)
+
+    # read & parse
+    df = pd.read_csv(csv_pth, sep="\t")
+    df = df.set_index("identifier")
+    df["mzs"] = df["mzs"].apply(parse_spec_array)
+    df["intensities"] = df["intensities"].apply(parse_spec_array)
+
+    # optional fold filtering
+    if fold is not None:
+        df = df[df["fold"] == fold]
+
+    return df
 
 def load_unlabeled_mols(col_name: str = "smiles") -> pd.Series:
     """
