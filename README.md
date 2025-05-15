@@ -154,12 +154,12 @@ de_novo_data_module = MassSpecDataModule(
     num_workers=0,
 )
 
-# 6. Prepare and set up
+# 4. Prepare and set up
 de_novo_data_module.prepare_data()
 de_novo_data_module.setup(stage="test")
 de_novo_data_module.setup()
 
-# 7. Get PyTorch DataLoaders
+# 5. Get PyTorch DataLoaders
 train_loader = de_novo_data_module.train_dataloader()
 val_loader   = de_novo_data_module.val_dataloader()
 test_loader  = de_novo_data_module.test_dataloader()
