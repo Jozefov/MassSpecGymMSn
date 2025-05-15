@@ -109,11 +109,12 @@ data_module = MassSpecDataModule(
     dataset=dataset,
     batch_size=batch_size,
     split_pth=split_file,
-    num_workers=4,
+    num_workers=0,
 )
 
 # 6. Prepare and set up (downloads/caches if needed)
 data_module.prepare_data()
+data_module.setup(stage="test")
 data_module.setup()
 
 # 7. Get PyTorch DataLoaders
@@ -150,13 +151,18 @@ de_novo_data_module = MassSpecDataModule(
     dataset=msn_dataset,
     batch_size=batch_size,
     split_pth=split_file,
-    num_workers=4,
+    num_workers=0,
 )
 
+# 6. Prepare and set up
 de_novo_data_module.prepare_data()
+de_novo_data_module.setup(stage="test")
 de_novo_data_module.setup()
 
+# 7. Get PyTorch DataLoaders
 train_loader = de_novo_data_module.train_dataloader()
+val_loader   = de_novo_data_module.val_dataloader()
+test_loader  = de_novo_data_module.test_dataloader()
 ```
 
 ## 🔗 Data
