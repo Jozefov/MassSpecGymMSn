@@ -9,7 +9,7 @@
 </p>
 
 <p align="center">
-  <img src="https://raw.githubusercontent.com/pluskal-lab/MassSpecGym/5d7d58af99947988f947eeb5bd5c6a472c2938b7/assets/MassSpecGym_abstract.svg" width="80%"/>
+  <img src="assets/MassSpecGymMSn_discoveries.png" width="80%"/>
 </p>
 
 MassSpecGymMSn is an extension of the original [MassSpecGym](https://github.com/pluskal-lab/MassSpecGym) benchmark to **multi-stage** mass spectrometry (MSn) data. It provides two machine-learning challenges, each with a “bonus” variant using ground-truth chemical formulae:
