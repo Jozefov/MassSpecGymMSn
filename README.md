@@ -71,7 +71,7 @@ In the retrieval challenge, each example is an MSn fragmentation tree (as a PyTo
 from massspecgym.data.datasets import MSnRetrievalDataset
 from massspecgym.data.transforms import MolFingerprinter
 from massspecgym.data import MassSpecDataModule
-from massspecgym.data.transforms import SpectrumFeaturizer
+from massspecgym.featurize import SpectrumFeaturizer
 
 # 1. A config dict specifies which spectrum attributes to encode and their preprocessing:
 config = {
@@ -132,7 +132,7 @@ In the de novo challenge, each example is an MSn tree without any candidate set.
 
 ```python
 from massspecgym.data.datasets import MSnDataset
-from massspecgym.data.transforms import SpectrumFeaturizer
+from massspecgym.featurize import SpectrumFeaturizer
 from massspecgym.data import MassSpecDataModule
 
 # 1. Reuse the same featurizer as above

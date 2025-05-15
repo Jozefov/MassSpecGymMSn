@@ -37,7 +37,9 @@ setup(
         "standardizeUtils @ git+https://github.com/boecker-lab/standardizeUtils/#egg=standardizeUtils",
         "chemparse",
         "chemformula",
-        "networkx"
+        "networkx",
+        "h5py",
+        "pandarallel",
     ],
     extras_require={
         "dev": [
@@ -48,9 +50,7 @@ setup(
         "notebooks": [
             "jupyter",
             "ipywidgets",
-            "h5py",
             "scikit-learn",
-            "pandarallel",
         ],
     }
 )
